@@ -786,6 +786,9 @@
         btn.textContent = '任务';
       }
     }
+    btn.style.setProperty('width', 'auto', 'important');
+    btn.style.setProperty('min-width', '0', 'important');
+    btn.style.setProperty('flex', '0 0 auto', 'important');
     btn.style.setProperty('cursor', 'pointer', 'important');
     btn.style.setProperty('user-select', 'none', 'important');
     return btn;
