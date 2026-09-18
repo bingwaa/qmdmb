@@ -363,14 +363,16 @@
 
   function onMessages(text) {
     let arr;
-    try { arr = JSON.parse(typeof text === 'string' ? text : String(text)); } catch (e) { return; }
+    try { arr = JSON.parse(typeof text === 'string' ? text : String(text)); } catch (e) { DBG.jsonFail++; return; }
     if (!Array.isArray(arr)) arr = [arr];
+    DBG.sms++;
     const me = myUid();
     for (let i = 0; i < arr.length; i++) {
       const m = arr[i];
       if (!m || typeof m.cmd !== 'string' || m.cmd.indexOf('SEND_GIFT') !== 0) continue;
+      DBG.gift++;
       const g = giftOf(m.data || {});
-      if (g && me && String(g.uid) === String(me)) pushGift(g);
+      if (g && me && String(g.uid) === String(me)) { DBG.mine++; pushGift(g); }
     }
   }
 
@@ -403,6 +405,12 @@
       const ver = dv.getUint16(off + 6);
       const op = dv.getUint32(off + 8);
       if (len < 16 || off + len > buf.byteLength) break;
+      DBG.frame++;
+      DBG.ops[op] = (DBG.ops[op] || 0) + 1;
+      DBG.vers[ver] = (DBG.vers[ver] || 0) + 1;
+      if (op === 8 && hlen >= 16 && !DBG.authReply) {
+        DBG.authReply = new TextDecoder().decode(new Uint8Array(buf, off + hlen, Math.min(len - hlen, 300)));
+      }
       if (op === 5 && hlen >= 16) {
         const body = new Uint8Array(buf, off + hlen, len - hlen);
         if (ver === 0) onMessages(new TextDecoder().decode(body));
@@ -469,6 +477,13 @@
     return buf;
   }
 
+  const DBG = {
+    pageSend: 0, auth: 0, authOp: -1, authPatched: 0, authText: '', authReply: '',
+    beat: 0, url: '', open: 0, close: 0, closeCode: 0, closeReason: '', err: 0,
+    msg: 0, frame: 0, ops: {}, vers: {}, sms: 0, jsonFail: 0, gift: 0, mine: 0
+  };
+  window.__qmdmb = DBG;
+
   let ownWs = null;
   let ownUrl = '';
   let ownAuth = null;
@@ -480,6 +495,7 @@
   /* 只读观察页面自己的 /sub 连接：抓走鉴权包与心跳包，页面数据原样发出 */
   function onPageSend(url, data) {
     if (!url || !WS_SUB_RE.test(url)) return;
+    DBG.pageSend++;
     const u8 = viewOf(data);
     if (!u8) {
       if (typeof data === 'string' && data.indexOf('"protover"') >= 0) acceptAuth(url, data);
@@ -488,7 +504,7 @@
     if (u8.length < 16) return;
     const op = packetOp(u8);
     if (op === OP_AUTH) acceptAuth(url, u8);
-    else if (op === OP_HEARTBEAT && !ownBeat) ownBeat = u8.slice();
+    else if (op === OP_HEARTBEAT) { DBG.beat++; if (!ownBeat) ownBeat = u8.slice(); }
   }
 
   function acceptAuth(url, auth) {
@@ -496,12 +512,16 @@
     const mu = /"uid"\s*:\s*(\d+)/.exec(text || '');
     if (mu) myUidCache = Number(mu[1]);
     if (ownWs && ownUrl === url && ownWs.readyState <= 1) return;
+    DBG.auth++;
+    DBG.authText = String(text || '').slice(0, 300);
+    DBG.url = url;
     ownUrl = url;
     if (typeof auth === 'string') {
       ownAuth = auth.replace(/"protover"\s*:\s*3/g, '"protover":2');
+      DBG.authPatched = ownAuth === auth ? 0 : 1;
     } else {
       const copy = auth.slice();
-      patchProtover(copy);
+      DBG.authPatched = patchProtover(copy) ? 1 : 0;
       ownAuth = copy;
     }
     connectOwn();
@@ -515,6 +535,7 @@
     ws.binaryType = 'arraybuffer';
     ownWs = ws;
     ws.onopen = () => {
+      DBG.open++;
       ownRetryWait = RETRY_MS;
       try { ws.send(ownAuth); } catch (e) {}
       ownBeatTimer = setInterval(() => {
@@ -522,14 +543,17 @@
         try { ws.send(ownBeat || makeBeat()); } catch (e) {}
       }, HEARTBEAT_MS);
     };
-    ws.onmessage = (e) => onFrame(e.data);
-    ws.onclose = () => {
+    ws.onmessage = (e) => { DBG.msg++; onFrame(e.data); };
+    ws.onclose = (e) => {
+      DBG.close++;
+      DBG.closeCode = e && e.code;
+      DBG.closeReason = String((e && e.reason) || '').slice(0, 80);
       if (ownWs !== ws) return;
       ownWs = null;
       stopBeat();
       scheduleRetry();
     };
-    ws.onerror = () => {};
+    ws.onerror = () => { DBG.err++; };
   }
 
   function stopBeat() {
