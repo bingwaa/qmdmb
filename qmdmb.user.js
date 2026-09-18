@@ -483,6 +483,7 @@
     msg: 0, frame: 0, ops: {}, vers: {}, sms: 0, jsonFail: 0, gift: 0, mine: 0
   };
   window.__qmdmb = DBG;
+  if (document.documentElement) document.documentElement.__qmdmb = DBG;
 
   let ownWs = null;
   let ownUrl = '';
