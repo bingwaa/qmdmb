@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.3.7
+// @version      1.3.5
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -28,7 +28,6 @@
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"]';
   const FOLLOW_SEL = '.follow-ctnr[data-curbutton="unFollow"]';
   const OFFLINE_SEL = '.status-tag';
-  const PANEL_IFRAME_SEL = 'iframe[src*="live-app-fanspanel"]';
 
   const API_ROOMINIT = 'https://api.live.bilibili.com/room/v1/Room/room_init';
   const API_ROOM = 'https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom';
@@ -926,19 +925,26 @@
 
   /* ---------- 可见性 ---------- */
 
-  /* 原生粉丝团面板是独立 iframe，关闭时为 display:none，打开时才可见 */
-  function panelOpen() {
-    const list = document.querySelectorAll(PANEL_IFRAME_SEL);
-    for (let i = 0; i < list.length; i++) {
-      if (list[i].getBoundingClientRect().width > 0) return true;
-    }
-    return false;
-  }
+  let restingH = null;
+  let missCount = 0;
 
   function refreshBtnVisibility() {
     const btn = document.getElementById(BTN_ID);
     if (!btn) return;
-    btn.style.visibility = panelOpen() ? 'hidden' : '';
+    const sv = document.getElementById('sections-vm');
+    const lc = sv && sv.querySelector('.left-container');
+    let open = false;
+    if (lc) {
+      const h = lc.getBoundingClientRect().height;
+      restingH = restingH === null ? h : Math.min(restingH, h);
+      open = restingH < 250 && h > restingH + 100;
+    }
+    if (open) {
+      missCount = 0;
+      btn.style.display = 'none';
+    } else if (++missCount >= 2) {
+      btn.style.display = '';
+    }
   }
 
   function init() {
