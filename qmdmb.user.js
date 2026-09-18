@@ -1,8 +1,15 @@
 // ==UserScript==
 // @name         B站未开播直播间·粉丝团亲密度任务面板
-// @namespace    local.qmdmb.bili-fan-medal
-// @version      1.2.0
+// @name:en      Bilibili Live Fan Medal Panel
+// @namespace    https://github.com/bingwaa/qmdmb
+// @version      1.2.1
+// @author       bingwaa
 // @description  在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度(按当前房间主播uid取数)
+// @description:en  Adds a panel to the Bilibili live room header showing fan medal intimacy, today's intimacy gain, per-task daily progress and the intimacy journey.
+// @license      MIT
+// @copyright    2026, bingwaa (https://github.com/bingwaa/qmdmb)
+// @homepageURL  https://github.com/bingwaa/qmdmb
+// @supportURL   https://github.com/bingwaa/qmdmb/issues
 // @updateURL    https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js
 // @downloadURL  https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js
 // @match        https://live.bilibili.com/*
