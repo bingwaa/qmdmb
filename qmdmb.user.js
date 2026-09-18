@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.2.1
+// @version      1.2.2
 // @author       bingwaa
 // @description  在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @license      MIT
@@ -32,8 +32,14 @@
   const API_MYMEDS = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/user/GetMyMedals';
   const API_ACTIVATED = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo';
   const API_COINEXP = 'https://api.bilibili.com/x/web-interface/coin/today/exp';
+  const API_NAV = 'https://api.bilibili.com/x/web-interface/nav';
   const COIN_EXP_PER_COIN = 10;
+  const GOLD_PER_BATTERY = 100;
   const DAY_MS = 24 * 3600 * 1000;
+  const WS_SUB_RE = /\/sub(\?|$)/;
+  const LIGHT_GIFT = '粉丝团灯牌';
+  const GIFT_STORE = 'qmdmb-gifts-';
+  const GIFT_REV = 'v2';
 
   const TASKMETA = {
     feedLight: '投喂粉丝灯牌',
@@ -63,10 +69,32 @@
     '直播间外：给主播投币（每日上限）',
     '直播间外：给主播充电（1 B 币）'
   ];
+  const GUARDNAME = { 1: '总督', 2: '提督', 3: '舰长' };
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function fmt(n) {
+    return Number(n).toLocaleString();
+  }
+
+  function initialState() {
+    try { return window.__INITIAL_STATE__ || {}; } catch (e) { return {}; }
+  }
 
   function getRoomId() {
     const m = /(\d+)/.exec(location.pathname);
     return m ? m[1] : '';
+  }
+
+  function dayStamp() {
+    const d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+  }
+
+  function cookie(name) {
+    return (document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)')) || [])[1] || '';
   }
 
   async function fetchJson(url) {
@@ -75,17 +103,12 @@
     return r.json();
   }
 
-  function getCsrf() {
-    return (document.cookie.match(/(?:^|; )bili_jct=([^;]*)/) || [])[1] || '';
-  }
+  /* ---------- 房间与亲密度数据 ---------- */
 
   async function resolveRoom() {
-    let ini = {};
-    try { ini = window.__INITIAL_STATE__ || {}; } catch (e) {}
+    const ini = initialState();
     const ri = ini.roomInfo || ini.roomInitRes || {};
-    if (ri.room_id || ri.uid) {
-      return { roomId: ri.room_id, uid: ri.uid };
-    }
+    if (ri.room_id || ri.uid) return { roomId: ri.room_id, uid: ri.uid };
     const urlId = getRoomId();
     if (!urlId) throw new Error('未识别到房间号');
     const j = await fetchJson(API_ROOMINIT + '?id=' + urlId);
@@ -95,13 +118,9 @@
   }
 
   async function getRoomMeta(roomId) {
-    let liveStatus = null, uname = '';
-    try {
-      const ini = window.__INITIAL_STATE__ || {};
-      const ri = ini.roomInfo || ini.roomInitRes || {};
-      if (ri.live_status != null) liveStatus = ri.live_status;
-      uname = ((ri.anchor_info || {}).base_info || {}).uname || '';
-    } catch (e) {}
+    const ri = initialState().roomInfo || initialState().roomInitRes || {};
+    let liveStatus = ri.live_status != null ? ri.live_status : null;
+    let uname = ((ri.anchor_info || {}).base_info || {}).uname || '';
     if (liveStatus == null) {
       const t = (document.body && document.body.innerText) || '';
       if (/暂未开播|未开播|主播还没来|主播偷偷溜走/.test(t)) liveStatus = 0;
@@ -109,10 +128,9 @@
     }
     try {
       const j = await fetchJson(API_ROOM + '?room_id=' + roomId);
-      if (j.code === 0 && j.data) {
-        if (j.data.room_info && j.data.room_info.live_status != null) liveStatus = j.data.room_info.live_status;
-        if (j.data.anchor_info && j.data.anchor_info.base_info && j.data.anchor_info.base_info.uname) uname = j.data.anchor_info.base_info.uname;
-      }
+      const d = j.code === 0 ? j.data : null;
+      if (d && d.room_info && d.room_info.live_status != null) liveStatus = d.room_info.live_status;
+      if (d && d.anchor_info && d.anchor_info.base_info && d.anchor_info.base_info.uname) uname = d.anchor_info.base_info.uname;
     } catch (e) {}
     return { liveStatus, uname };
   }
@@ -130,13 +148,8 @@
     return null;
   }
 
-  function apiReason(j) {
-    return ((j.message || '') + (j.message && j.code != null ? '(' + j.code + ')' : '')) ||
-      ('任务进度接口 code ' + (j.code != null ? j.code : '?'));
-  }
-
   async function fetchTasks(uid) {
-    const csrf = getCsrf();
+    const csrf = cookie('bili_jct');
     const base = 'target_id=' + encodeURIComponent(uid) + '&web_location=444.260';
     const tail = csrf ? '&csrf=' + csrf : '';
     const urls = [
@@ -151,13 +164,14 @@
         return {
           ok: true,
           tasks: j.data.task_info || [],
-          freeIntimacy: j.data.free_intimacy,
-          reachLimit: j.data.reach_free_intimacy_limit,
+          free: j.data.free_intimacy,
+          reach: j.data.reach_free_intimacy_limit,
           journey: j.data.intimacy_journey_info || null,
           guard: Number(j.data.guard_level) || 0
         };
       }
-      reason = apiReason(j);
+      reason = (j.message || '') + (j.code != null ? '(' + j.code + ')' : '') ||
+        ('任务进度接口 code ' + (j.code != null ? j.code : '?'));
     }
     return { ok: false, reason };
   }
@@ -169,74 +183,48 @@
     return Math.floor((Number(j.data) || 0) / COIN_EXP_PER_COIN);
   }
 
-  const GOLD_PER_BATTERY = 100;
-  const LIGHT_GIFT = '粉丝团灯牌';
-  const WS_SUB_RE = /\/sub(\?|$)/;
-  const giftRows = [];
-  const GIFT_STORE = 'qmdmb-gifts-';
-  const GIFT_REV = 'v2';
-
-  function dayStamp() {
-    const d = new Date();
-    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
-  }
-
-  function giftKey() {
-    return GIFT_STORE + GIFT_REV + '-' + getRoomId() + '-' + dayStamp();
-  }
-
-  function loadGifts() {
-    const key = giftKey();
-    try {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const k = localStorage.key(i);
-        if (k && k.indexOf(GIFT_STORE) === 0 && k !== key) localStorage.removeItem(k);
-      }
-      const s = localStorage.getItem(key);
-      if (!s) return;
-      const arr = JSON.parse(s);
-      if (!Array.isArray(arr)) return;
-      giftRows.length = 0;
-      arr.forEach((g) => {
-        if (g && g.name) {
-          giftRows.push({ name: String(g.name), num: Number(g.num) || 0, battery: Number(g.battery) || 0 });
-        }
-      });
-    } catch (e) {}
-  }
-
-  function saveGifts() {
-    try {
-      localStorage.setItem(giftKey(), JSON.stringify(giftRows));
-    } catch (e) {}
-  }
-  let renderArgs = null;
-  const DBG = { ws: 0, raw: 0, kind: {}, sizes: [], head: null, ver: {}, frame: 0, op5: 0, gift: 0, mine: 0, bad: 0, err: 0, send: 0, auth: 0, authHit: 0, authRaw: null, uid: 0, nav: 0, cmds: {}, texts: [], badJson: 0, notArr: 0, items: 0, giftData: null };
-  window.__qmdmb = DBG;
+  /* ---------- 当前用户 uid ---------- */
 
   let myUidCache = 0;
 
   function myUid() {
     if (myUidCache) return myUidCache;
-    const m = document.cookie.match(/(?:^|; )DedeUserID=(\d+)/);
-    if (m) { myUidCache = Number(m[1]); return myUidCache; }
-    try {
-      const ini = window.__INITIAL_STATE__ || {};
-      if (ini.uid) { myUidCache = Number(ini.uid); return myUidCache; }
-      const ri = ini.roomInfo || {};
-      if (ri.uid) { myUidCache = Number(ri.uid); }
-    } catch (e) {}
+    const m = cookie('DedeUserID').match(/^(\d+)$/);
+    if (m) myUidCache = Number(m[1]);
+    else if (initialState().uid) myUidCache = Number(initialState().uid);
     return myUidCache;
   }
 
   async function loadUid() {
     if (myUid()) return;
     try {
-      const j = await fetchJson('https://api.bilibili.com/x/web-interface/nav');
+      const j = await fetchJson(API_NAV);
       const mid = j && j.data && j.data.mid;
-      DBG.nav = Number(mid) || 0;
       if (mid) myUidCache = Number(mid);
     } catch (e) {}
+  }
+
+  /* ---------- 二进制工具 ---------- */
+
+  function viewOf(d) {
+    if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+    if (Object.prototype.toString.call(d) === '[object ArrayBuffer]') return new Uint8Array(d);
+    return null;
+  }
+
+  function textOf(d) {
+    const u8 = viewOf(d);
+    return u8 ? new TextDecoder().decode(u8) : (typeof d === 'string' ? d : null);
+  }
+
+  async function toU8(d) {
+    if (d == null || typeof d === 'string') return null;
+    const u8 = viewOf(d);
+    if (u8) return u8;
+    if (typeof d.arrayBuffer === 'function') {
+      try { return new Uint8Array(await d.arrayBuffer()); } catch (e) { return null; }
+    }
+    return null;
   }
 
   function b64ToU8(s) {
@@ -245,6 +233,8 @@
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return u8;
   }
+
+  /* ---------- protobuf 扫描 ---------- */
 
   function pbScan(b, start, end) {
     const out = {};
@@ -303,7 +293,36 @@
     return null;
   }
 
+  /* ---------- 礼物累计与存储 ---------- */
+
+  const giftRows = [];
   let feedLightSeen = false;
+
+  function giftKey() {
+    return GIFT_STORE + GIFT_REV + '-' + getRoomId() + '-' + dayStamp();
+  }
+
+  function loadGifts() {
+    const key = giftKey();
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf(GIFT_STORE) === 0 && k !== key) localStorage.removeItem(k);
+      }
+      const arr = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!Array.isArray(arr)) return;
+      giftRows.length = 0;
+      arr.forEach((g) => {
+        if (g && g.name) {
+          giftRows.push({ name: String(g.name), num: Number(g.num) || 0, battery: Number(g.battery) || 0 });
+        }
+      });
+    } catch (e) {}
+  }
+
+  function saveGifts() {
+    try { localStorage.setItem(giftKey(), JSON.stringify(giftRows)); } catch (e) {}
+  }
 
   function feedTaskDone() {
     const t = renderArgs && renderArgs.tasks
@@ -328,27 +347,18 @@
     rerender();
   }
 
+  /* ---------- WebSocket 抓包 ---------- */
+
   function onMessages(text) {
-    const s = typeof text === 'string' ? text : String(text);
-    if (DBG.texts.length < 3) DBG.texts.push(s.slice(0, 180));
     let arr;
-    try { arr = JSON.parse(s); } catch (e) { DBG.badJson++; return; }
-    if (!Array.isArray(arr)) { DBG.notArr++; arr = [arr]; }
-    DBG.items += arr.length;
+    try { arr = JSON.parse(typeof text === 'string' ? text : String(text)); } catch (e) { return; }
+    if (!Array.isArray(arr)) arr = [arr];
     const me = myUid();
-    DBG.uid = me;
     for (let i = 0; i < arr.length; i++) {
       const m = arr[i];
-      if (!m || typeof m.cmd !== 'string') continue;
-      DBG.cmds[m.cmd] = (DBG.cmds[m.cmd] || 0) + 1;
-      if (m.cmd.indexOf('SEND_GIFT') !== 0) continue;
-      DBG.gift++;
-      const d = m.data || {};
-      const g = giftOf(d);
-      DBG.giftData = g || d.pb || d;
-      if (!g || !me || String(g.uid) !== String(me)) continue;
-      DBG.mine++;
-      pushGift(g);
+      if (!m || typeof m.cmd !== 'string' || m.cmd.indexOf('SEND_GIFT') !== 0) continue;
+      const g = giftOf(m.data || {});
+      if (g && me && String(g.uid) === String(me)) pushGift(g);
     }
   }
 
@@ -373,7 +383,6 @@
 
   function readFrames(u8) {
     const buf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
-    if (!DBG.head) DBG.head = Array.from(new Uint8Array(buf, 0, Math.min(16, buf.byteLength)));
     const dv = new DataView(buf);
     let off = 0;
     while (off + 16 <= buf.byteLength) {
@@ -382,15 +391,12 @@
       const ver = dv.getUint16(off + 6);
       const op = dv.getUint32(off + 8);
       if (len < 16 || off + len > buf.byteLength) break;
-      DBG.frame++;
-      DBG.ver[ver] = (DBG.ver[ver] || 0) + 1;
       if (op === 5 && hlen >= 16) {
-        DBG.op5++;
         const body = new Uint8Array(buf, off + hlen, len - hlen);
         if (ver === 0) onMessages(new TextDecoder().decode(body));
         else if (ver === 2) {
           inflate(body).then((out) => {
-            if (!out || !out.length) { DBG.bad++; return; }
+            if (!out || !out.length) return;
             if (looksFrames(out)) readFrames(out);
             else onMessages(new TextDecoder().decode(out));
           });
@@ -400,31 +406,12 @@
     }
   }
 
-  function tagOf(d) {
-    try { return Object.prototype.toString.call(d); } catch (e) { return '?'; }
-  }
-
-  function asText(d) {
-    if (typeof d === 'string') return d;
-    if (ArrayBuffer.isView(d)) return new TextDecoder().decode(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
-    if (tagOf(d) === '[object ArrayBuffer]') return new TextDecoder().decode(new Uint8Array(d));
-    return null;
-  }
-
-  function asView(d) {
-    if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
-    if (tagOf(d) === '[object ArrayBuffer]') return new Uint8Array(d);
-    return null;
-  }
-
-  const PROTOVER = Array.from(new TextEncoder().encode('"protover"'));
-  const COLON = 0x3a;
-  const SPACE = 0x20;
-  const THREE = 0x33;
-  const TWO = 0x32;
+  const PROTOVER = new TextEncoder().encode('"protover"');
+  const SPACE = 0x20, COLON = 0x3a, TWO = 0x32, THREE = 0x33;
 
   function findProtover(u8) {
-    for (let i = 0, n = u8.length - PROTOVER.length; i <= n; i++) {
+    const n = u8.length - PROTOVER.length;
+    for (let i = 0; i <= n; i++) {
       if (u8[i] !== PROTOVER[0]) continue;
       let j = 1;
       while (j < PROTOVER.length && u8[i + j] === PROTOVER[j]) j++;
@@ -441,30 +428,16 @@
       let k = from + at + PROTOVER.length;
       while (k < u8.length && (u8[k] === SPACE || u8[k] === COLON)) k++;
       if (u8[k] === THREE) { u8[k] = TWO; return true; }
-      from = from + at + PROTOVER.length;
+      from += at + PROTOVER.length;
     }
-  }
-
-  async function toU8(data) {
-    if (data == null || typeof data === 'string') return null;
-    if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    if (tagOf(data) === '[object ArrayBuffer]') return new Uint8Array(data);
-    if (typeof data.arrayBuffer === 'function') {
-      try { return new Uint8Array(await data.arrayBuffer()); } catch (e) { return null; }
-    }
-    return null;
   }
 
   async function onFrame(data) {
-    DBG.raw++;
-    const k = tagOf(data);
-    DBG.kind[k] = (DBG.kind[k] || 0) + 1;
     if (typeof data === 'string') { onMessages(data); return; }
     let u8 = null;
-    try { u8 = await toU8(data); } catch (e) { u8 = null; }
-    if (!u8 || u8.length < 16) { DBG.err++; return; }
-    if (DBG.sizes.length < 10) DBG.sizes.push(u8.length);
-    try { readFrames(u8); } catch (e) { DBG.err++; }
+    try { u8 = await toU8(data); } catch (e) {}
+    if (!u8 || u8.length < 16) return;
+    try { readFrames(u8); } catch (e) {}
   }
 
   function installWsHook() {
@@ -474,23 +447,17 @@
     const origSend = proto.send;
     proto.send = function (data) {
       try {
-        DBG.send++;
         if (typeof data === 'string') {
           if (data.indexOf('protover') >= 0) {
-            DBG.auth++;
-            const out = data.replace(/"protover"\s*:\s*3/g, '"protover":2');
-            if (out !== data) { data = out; DBG.authHit++; }
+            data = data.replace(/"protover"\s*:\s*3/g, '"protover":2');
           }
         } else {
-          const u8 = asView(data);
+          const u8 = viewOf(data);
           if (u8 && findProtover(u8) >= 0) {
-            DBG.auth++;
-            const s = asText(data);
-            DBG.authRaw = s.slice(180, 300);
-            const mu = /"uid"\s*:\s*(\d+)/.exec(s);
-            if (mu && Number(mu[1])) myUidCache = Number(mu[1]);
+            const mu = /"uid"\s*:\s*(\d+)/.exec(textOf(data) || '');
+            if (mu) myUidCache = Number(mu[1]);
             const copy = u8.slice();
-            if (patchProtover(copy)) { data = copy; DBG.authHit++; }
+            if (patchProtover(copy)) data = copy;
           }
         }
       } catch (e) {}
@@ -499,10 +466,7 @@
     function Wrapped(url, protocols) {
       const ws = arguments.length > 1 ? new Orig(url, protocols) : new Orig(url);
       try {
-        if (WS_SUB_RE.test(String(url))) {
-          DBG.ws++;
-          ws.addEventListener('message', (e) => onFrame(e.data));
-        }
+        if (WS_SUB_RE.test(String(url))) ws.addEventListener('message', (e) => onFrame(e.data));
       } catch (e) {}
       return ws;
     }
@@ -515,23 +479,23 @@
     window.WebSocket = Wrapped;
   }
 
+  /* ---------- 面板渲染 ---------- */
+
+  let renderArgs = null;
   let rerenderTimer = null;
 
   function rerender() {
     if (!renderArgs) return;
     clearTimeout(rerenderTimer);
     rerenderTimer = setTimeout(() => {
-      if (!document.getElementById(PANEL_ID)) return;
-      const a = renderArgs;
-      renderPanel(a.room, a.medal, a.tasks, a.store, a.reason, a.journey, a.guard, a.coins);
+      if (document.getElementById(PANEL_ID)) renderPanel(renderArgs);
     }, 300);
   }
 
-  function activityOf(status) {
-    return status === 1 ? 'on' : (status === 0 || status === 2) ? 'off' : 'unk';
-  }
-  function statusText(status) {
-    return status === 1 ? '直播中' : (status === 0 || status === 2) ? '未开播' : '状态未知';
+  function liveInfo(status) {
+    if (status === 1) return { cls: 'on', text: '直播中' };
+    if (status === 0 || status === 2) return { cls: 'off', text: '未开播' };
+    return { cls: 'unk', text: '状态未知' };
   }
 
   function toast(msg, ok) {
@@ -549,32 +513,6 @@
     t.style.opacity = '1';
     clearTimeout(t._t);
     t._t = setTimeout(() => (t.style.opacity = '0'), 2800);
-  }
-
-  let restingH = null;
-  let missCount = 0;
-
-  function fanPanelOpen() {
-    const sv = document.getElementById('sections-vm');
-    if (!sv) return false;
-    const lc = sv.querySelector('.left-container');
-    if (!lc) return false;
-    const h = lc.getBoundingClientRect().height;
-    if (restingH === null) restingH = h;
-    else if (h < restingH) restingH = h;
-    if (restingH >= 250) return false;
-    return h > restingH + 100;
-  }
-
-  function refreshBtnVisibility() {
-    const btn = document.getElementById(BTN_ID);
-    if (!btn) return;
-    if (fanPanelOpen()) {
-      missCount = 0;
-      btn.style.display = 'none';
-    } else if (++missCount >= 2) {
-      btn.style.display = '';
-    }
   }
 
   function ensureStyle() {
@@ -629,23 +567,15 @@
       const type = t.jump_type;
       const name = TASKMETA[type] || t.title || '任务';
       const mm = /(\d+)\s*\/\s*(\d+)/.exec(String(t.sub_title || ''));
-      const cur = mm ? mm[1] : '';
-      const total = mm ? mm[2] : '';
       const done = t.is_done === 1 || t.is_done === true;
       const pill = done
         ? '<span class="p-pill p-done">已完成</span>'
         : '<span class="p-pill p-action">' + (TASKACT[type] || '去完成') + '</span>';
-      const reward = TASKREWARD[type] || '';
-      const meta = [reward, cur ? '每日上限 ' + cur + '/' + total : ''].filter(Boolean).join(' · ');
+      const meta = [TASKREWARD[type] || '', mm ? '每日上限 ' + mm[1] + '/' + mm[2] : ''].filter(Boolean).join(' · ');
       return '<div class="task"><div class="t-row"><span class="n">' + esc(name) + '</span>' + pill + '</div>' +
         (meta ? '<div class="t-meta">' + esc(meta) + '</div>' : '') + '</div>';
     }).join('');
     return rows || '<div class="dim">今日暂无可用任务</div>';
-  }
-
-  function journeyState(info) {
-    const left = (Number(info.task_intimacy_journey_gift_expire_ts) || 0) * 1000 - Date.now();
-    return { unlocked: !!info.has_task_intimacy_journey_gift && left > 0, left: left };
   }
 
   function journeyHtml(info) {
@@ -653,51 +583,21 @@
     const total = Number(info.total_days) || 0;
     if (total <= 0) return '';
     const done = Math.min(Number(info.completed_days) || 0, total);
-    const st = journeyState(info);
 
     let seg = '';
     for (let i = 0; i < total; i++) seg += '<i class="' + (i < done ? 'on' : '') + '"></i>';
 
     let stateRow = '';
-    if (st.unlocked) {
-      const days = Math.floor(st.left / DAY_MS);
-      const hh = String(Math.floor((st.left % DAY_MS) / 3600000)).padStart(2, '0');
-      const mm = String(Math.floor((st.left % 3600000) / 60000)).padStart(2, '0');
+    const left = (Number(info.task_intimacy_journey_gift_expire_ts) || 0) * 1000 - Date.now();
+    if (info.has_task_intimacy_journey_gift && left > 0) {
+      const days = Math.floor(left / DAY_MS);
+      const hh = String(Math.floor((left % DAY_MS) / 3600000)).padStart(2, '0');
+      const mm = String(Math.floor((left % 3600000) / 60000)).padStart(2, '0');
       stateRow = '<div class="save">旅程礼物已解锁 · 剩余 ' + (days >= 1 ? days + ' 天' : hh + ':' + mm) + ' 领取时限</div>';
     }
 
     return '<div class="journey"><div class="tt">亲密之旅<span class="dim">已完成 ' + done + ' / ' + total + ' 天</span></div>' +
       '<div class="jseg">' + seg + '</div>' + stateRow + '</div>';
-  }
-
-  function gainUnit(t) {
-    const m = /亲密度\s*\+\s*(\d+)/.exec(String(t.add_text || ''));
-    return m ? Number(m[1]) : 0;
-  }
-
-  function gainRows(tasks) {
-    const rows = [];
-    (tasks || []).forEach((t) => {
-      const mm = /(\d+)\s*\/\s*(\d+)/.exec(String(t.sub_title || ''));
-      if (!mm) return;
-      const cur = Number(mm[1]);
-      const total = Number(mm[2]);
-      if (!cur) return;
-      const unit = gainUnit(t);
-      rows.push({
-        name: TASKMETA[t.jump_type] || t.title || '任务',
-        mid: cur + '/' + total,
-        gained: cur * unit,
-      });
-    });
-    return rows;
-  }
-
-  const GUARDNAME = { 1: '总督', 2: '提督', 3: '舰长' };
-
-  function guardHtml(guard) {
-    const name = GUARDNAME[guard];
-    return name ? '<span class="tag">' + name + '</span>' : '';
   }
 
   function gainRowHtml(r) {
@@ -708,13 +608,23 @@
 
   function gainHtml(tasks, medal, guard, coins) {
     if (!tasks || !tasks.length) return '';
-    const rows = gainRows(tasks);
-    giftRows.forEach((g) => {
-      rows.push({ name: g.name, mid: '×' + g.num, gained: g.battery });
+    const rows = [];
+    tasks.forEach((t) => {
+      const mm = /(\d+)\s*\/\s*(\d+)/.exec(String(t.sub_title || ''));
+      if (!mm || !Number(mm[1])) return;
+      const unit = (/亲密度\s*\+\s*(\d+)/.exec(String(t.add_text || '')) || [0, 0])[1];
+      rows.push({
+        name: TASKMETA[t.jump_type] || t.title || '任务',
+        mid: mm[1] + '/' + mm[2],
+        gained: Number(mm[1]) * Number(unit)
+      });
     });
+    giftRows.forEach((g) => rows.push({ name: g.name, mid: '×' + g.num, gained: g.battery }));
+
     const sum = rows.reduce((a, r) => a + r.gained, 0);
     let body = rows.length ? rows.map(gainRowHtml).join('') : '<div class="dim">今日暂无亲密度增长</div>';
     if (coins > 0) body += gainRowHtml({ name: '投币', mid: '全站 ' + coins + ' 币', gained: null });
+
     let total = sum;
     let foot = '<div class="g-sum">明细合计 <b>+' + sum + '</b>';
     if (guard > 0) {
@@ -724,15 +634,14 @@
     }
     foot += '</div>';
     const tFeed = medal && medal.today_feed != null ? Number(medal.today_feed) : null;
-    if (tFeed != null) {
-      const rest = tFeed - total;
-      if (rest > 0) foot += '<div class="g-sum dim">其他（充电/投币）+' + rest + '</div>';
+    if (tFeed != null && tFeed - total > 0) {
+      foot += '<div class="g-sum dim">其他（充电/投币）+' + (tFeed - total) + '</div>';
     }
     return '<div class="gain"><div class="tt">今日亲密度增长明细</div>' + body + foot + '</div>';
   }
 
-  function renderPanel(room, medal, tasks, store, reason, journey, guard, coins) {
-    renderArgs = { room: room, medal: medal, tasks: tasks, store: store, reason: reason, journey: journey, guard: guard, coins: coins };
+  function renderPanel(s) {
+    renderArgs = s;
     ensureStyle();
     let p = document.getElementById(PANEL_ID);
     if (!p) {
@@ -741,16 +650,16 @@
       document.documentElement.appendChild(p);
     }
 
-    const status = room.liveStatus;
-    const cls = activityOf(status);
+    const room = s.room, medal = s.medal, tasks = s.tasks;
+    const live = liveInfo(room.liveStatus);
     const uname = (medal && medal.target_name) || room.uname || '主播';
 
     if (!medal && !tasks) {
       p.innerHTML =
         '<div class="hd">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
-        ' <span class="' + cls + '">' + statusText(status) + '</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span></div>' +
         '<div class="dim">你尚未加入该主播的粉丝团。</div>' +
-        (reason ? '<div class="row dim">' + esc(reason) + '</div>' : '');
+        (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '');
       return;
     }
 
@@ -759,73 +668,67 @@
       (tasks ? tasksHtml(tasks) : TASKS_FALLBACK.map((t) => '<div class="task"><div class="t-meta">' + t + '</div></div>').join('')) +
       '</div>';
 
-    const medalRows = medal
-      ? (function () {
-          const intimacy = medal.intimacy != null ? medal.intimacy : 0;
-          const next = medal.next_intimacy != null ? medal.next_intimacy : 0;
-          const pct = next > 0 ? Math.min(100, Math.round((intimacy / next) * 100)) : 0;
-          const tFeed = medal.today_feed != null ? medal.today_feed : 0;
-          const tDay = medal.day_limit != null ? medal.day_limit : 0;
-          return '<div class="row dim">目标主播：' + esc(uname) + '</div>' +
-            '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
-            '<div class="row">亲密度 <b>' + fmt(intimacy) + '</b> / ' + fmt(next) + '</div>' +
-            '<div class="row">今日亲密度 <b>' + fmt(tFeed) + '</b> / ' + fmt(tDay) + '</div>';
-        })()
-      : '';
+    let medalRows = '';
+    if (medal) {
+      const intimacy = medal.intimacy != null ? medal.intimacy : 0;
+      const next = medal.next_intimacy != null ? medal.next_intimacy : 0;
+      const pct = next > 0 ? Math.min(100, Math.round((intimacy / next) * 100)) : 0;
+      medalRows = '<div class="row dim">目标主播：' + esc(uname) + '</div>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+        '<div class="row">亲密度 <b>' + fmt(intimacy) + '</b> / ' + fmt(next) + '</div>' +
+        '<div class="row">今日亲密度 <b>' + fmt(medal.today_feed != null ? medal.today_feed : 0) + '</b> / ' +
+          fmt(medal.day_limit != null ? medal.day_limit : 0) + '</div>';
+    }
 
     let storeRow = '';
-    if (store && store.free != null) {
-      const n = Number(store.free);
+    if (s.store && s.store.free != null) {
+      const n = Number(s.store.free);
       storeRow = n > 0
-        ? '<div class="save">已储蓄 <b>' + fmt(n) + '</b> 亲密度' + (store.reach ? ' · 已达上限' : '') + ' · 投喂领取</div>'
+        ? '<div class="save">已储蓄 <b>' + fmt(n) + '</b> 亲密度' + (s.store.reach ? ' · 已达上限' : '') + ' · 投喂领取</div>'
         : '<div class="save save-off">暂无储蓄亲密度</div>';
     }
 
+    const guard = GUARDNAME[s.guard];
     p.innerHTML =
       '<div class="hd">' + esc(name) +
         ' <span class="tag">Lv.' + (medal && medal.level != null ? medal.level : '?') + '</span>' +
-        guardHtml(guard) +
-        ' <span class="' + cls + '">' + statusText(status) + '</span></div>' +
+        (guard ? '<span class="tag">' + guard + '</span>' : '') +
+        ' <span class="' + live.cls + '">' + live.text + '</span></div>' +
       medalRows +
       storeRow +
-      journeyHtml(journey) +
-      gainHtml(tasks, medal, guard, coins) +
+      journeyHtml(s.journey) +
+      gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
-  }
-
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-  function fmt(n) {
-    return Number(n).toLocaleString();
   }
 
   async function open() {
     try {
       const room = await resolveRoom();
       const meta = await getRoomMeta(room.roomId);
-      room.liveStatus = meta.liveStatus;
-      room.uname = meta.uname;
-
       const medal = await getMyMedal(room.uid);
       const t = await fetchTasks(room.uid);
       const coins = await fetchCoins();
-
-      if (!medal && !t.ok) {
-        renderPanel(room, null, null, null, t.reason, null, 0, coins);
-        return;
-      }
-      const tasks = t.ok ? t.tasks : null;
-      renderPanel(room, medal, tasks, t.ok ? { free: t.freeIntimacy, reach: t.reachLimit } : null, null, t.ok ? t.journey : null, t.ok ? t.guard : 0, coins);
+      renderPanel({
+        room: { liveStatus: meta.liveStatus, uname: meta.uname },
+        medal: medal,
+        tasks: t.ok ? t.tasks : null,
+        reason: t.ok ? null : t.reason,
+        store: t.ok ? { free: t.free, reach: t.reach } : null,
+        journey: t.ok ? t.journey : null,
+        guard: t.ok ? t.guard : 0,
+        coins: coins
+      });
     } catch (e) {
       toast('打开失败：' + e.message, false);
     }
   }
 
+  /* ---------- 按钮注入 ---------- */
+
   function togglePanel() {
     const p = document.getElementById(PANEL_ID);
-    if (p) { p.remove(); return; }
-    open();
+    if (p) p.remove();
+    else open();
   }
 
   function pick(sel) {
@@ -841,12 +744,12 @@
     if (cap) return { el: cap, after: false };
     const tags = document.querySelectorAll(OFFLINE_SEL);
     for (let i = 0; i < tags.length; i++) {
-      if (tags[i].id === BTN_ID) continue;
-      if (tags[i].textContent.indexOf('未开播') >= 0) return { el: tags[i], after: true };
+      if (tags[i].id !== BTN_ID && tags[i].textContent.indexOf('未开播') >= 0) {
+        return { el: tags[i], after: true };
+      }
     }
     const follow = pick(FOLLOW_SEL);
-    if (follow) return { el: follow, after: true };
-    return null;
+    return follow ? { el: follow, after: true } : null;
   }
 
   function makeEntry(src) {
@@ -897,17 +800,40 @@
       }
       old.remove();
     }
-    if (target) {
-      const btn = makeEntry(pick(FOLLOW_SEL) || target.el);
-      btn._cap = target.el;
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        togglePanel();
-      });
-      if (target.after) target.el.after(btn);
-      else target.el.before(btn);
-      tighten(btn, target.el);
+    if (!target) return;
+    const btn = makeEntry(pick(FOLLOW_SEL) || target.el);
+    btn._cap = target.el;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      togglePanel();
+    });
+    if (target.after) target.el.after(btn);
+    else target.el.before(btn);
+    tighten(btn, target.el);
+  }
+
+  /* ---------- 可见性 ---------- */
+
+  let restingH = null;
+  let missCount = 0;
+
+  function refreshBtnVisibility() {
+    const btn = document.getElementById(BTN_ID);
+    if (!btn) return;
+    const sv = document.getElementById('sections-vm');
+    const lc = sv && sv.querySelector('.left-container');
+    let open = false;
+    if (lc) {
+      const h = lc.getBoundingClientRect().height;
+      restingH = restingH === null ? h : Math.min(restingH, h);
+      open = restingH < 250 && h > restingH + 100;
+    }
+    if (open) {
+      missCount = 0;
+      btn.style.display = 'none';
+    } else if (++missCount >= 2) {
+      btn.style.display = '';
     }
   }
 
