@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.2.7
+// @version      1.3.0
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -42,7 +42,12 @@
   const LIGHT_GIFT = '粉丝团灯牌';
   const GIFT_STORE = 'qmdmb-gifts-';
   const GIFT_REV = 'v2';
-  const PATCH_PROTOVER = false;
+
+  const OP_HEARTBEAT = 2;
+  const OP_AUTH = 7;
+  const HEARTBEAT_MS = 30 * 1000;
+  const RETRY_MS = 3 * 1000;
+  const RETRY_MAX_MS = 60 * 1000;
 
   const TASKMETA = {
     feedLight: '投喂粉丝灯牌',
@@ -447,45 +452,123 @@
     try { readFrames(u8); } catch (e) {}
   }
 
+  function packetOp(u8) {
+    return new DataView(u8.buffer, u8.byteOffset, u8.byteLength).getUint32(8);
+  }
+
+  function makeBeat() {
+    const body = new TextEncoder().encode('[object Object]');
+    const buf = new Uint8Array(16 + body.length);
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(0, buf.length);
+    dv.setUint16(4, 16);
+    dv.setUint16(6, 1);
+    dv.setUint32(8, OP_HEARTBEAT);
+    dv.setUint32(12, 1);
+    buf.set(body, 16);
+    return buf;
+  }
+
+  let ownWs = null;
+  let ownUrl = '';
+  let ownAuth = null;
+  let ownBeat = null;
+  let ownBeatTimer = null;
+  let ownRetryTimer = null;
+  let ownRetryWait = RETRY_MS;
+
+  /* 只读观察页面自己的 /sub 连接：抓走鉴权包与心跳包，页面数据原样发出 */
+  function onPageSend(url, data) {
+    if (!url || !WS_SUB_RE.test(url)) return;
+    const u8 = viewOf(data);
+    if (!u8) {
+      if (typeof data === 'string' && data.indexOf('"protover"') >= 0) acceptAuth(url, data);
+      return;
+    }
+    if (u8.length < 16) return;
+    const op = packetOp(u8);
+    if (op === OP_AUTH) acceptAuth(url, u8);
+    else if (op === OP_HEARTBEAT && !ownBeat) ownBeat = u8.slice();
+  }
+
+  function acceptAuth(url, auth) {
+    const text = typeof auth === 'string' ? auth : textOf(auth);
+    const mu = /"uid"\s*:\s*(\d+)/.exec(text || '');
+    if (mu) myUidCache = Number(mu[1]);
+    if (ownWs && ownUrl === url && ownWs.readyState <= 1) return;
+    ownUrl = url;
+    if (typeof auth === 'string') {
+      ownAuth = auth.replace(/"protover"\s*:\s*3/g, '"protover":2');
+    } else {
+      const copy = auth.slice();
+      patchProtover(copy);
+      ownAuth = copy;
+    }
+    connectOwn();
+  }
+
+  function connectOwn() {
+    closeOwn();
+    if (!ownAuth) return;
+    let ws;
+    try { ws = new WebSocket(ownUrl); } catch (e) { scheduleRetry(); return; }
+    ws.binaryType = 'arraybuffer';
+    ownWs = ws;
+    ws.onopen = () => {
+      ownRetryWait = RETRY_MS;
+      try { ws.send(ownAuth); } catch (e) {}
+      ownBeatTimer = setInterval(() => {
+        if (ws.readyState !== 1) return;
+        try { ws.send(ownBeat || makeBeat()); } catch (e) {}
+      }, HEARTBEAT_MS);
+    };
+    ws.onmessage = (e) => onFrame(e.data);
+    ws.onclose = () => {
+      if (ownWs !== ws) return;
+      ownWs = null;
+      stopBeat();
+      scheduleRetry();
+    };
+    ws.onerror = () => {};
+  }
+
+  function stopBeat() {
+    clearInterval(ownBeatTimer);
+    ownBeatTimer = null;
+  }
+
+  function closeOwn() {
+    stopBeat();
+    clearTimeout(ownRetryTimer);
+    ownRetryTimer = null;
+    const ws = ownWs;
+    ownWs = null;
+    if (!ws) return;
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try { ws.close(); } catch (e) {}
+  }
+
+  function scheduleRetry() {
+    if (!ownAuth || ownRetryTimer) return;
+    const wait = ownRetryWait;
+    ownRetryWait = Math.min(wait * 2, RETRY_MAX_MS);
+    ownRetryTimer = setTimeout(() => {
+      ownRetryTimer = null;
+      connectOwn();
+    }, wait);
+  }
+
   function installWsHook() {
-    const Orig = window.WebSocket;
-    if (!Orig || Orig.__qmdmb) return;
-    const proto = Orig.prototype;
+    const proto = window.WebSocket && window.WebSocket.prototype;
+    if (!proto || proto.__qmdmb) return;
     const origSend = proto.send;
     proto.send = function (data) {
       try {
-        if (typeof data === 'string') {
-          if (PATCH_PROTOVER && data.indexOf('protover') >= 0) {
-            data = data.replace(/"protover"\s*:\s*3/g, '"protover":2');
-          }
-        } else {
-          const u8 = viewOf(data);
-          if (u8 && findProtover(u8) >= 0) {
-            const mu = /"uid"\s*:\s*(\d+)/.exec(textOf(data) || '');
-            if (mu) myUidCache = Number(mu[1]);
-            if (PATCH_PROTOVER) {
-              const copy = u8.slice();
-              if (patchProtover(copy)) data = copy;
-            }
-          }
-        }
+        if (this !== ownWs) onPageSend(this.url, data);
       } catch (e) {}
       return origSend.call(this, data);
     };
-    function Wrapped(url, protocols) {
-      const ws = arguments.length > 1 ? new Orig(url, protocols) : new Orig(url);
-      try {
-        if (WS_SUB_RE.test(String(url))) ws.addEventListener('message', (e) => onFrame(e.data));
-      } catch (e) {}
-      return ws;
-    }
-    Wrapped.prototype = proto;
-    Wrapped.CONNECTING = Orig.CONNECTING;
-    Wrapped.OPEN = Orig.OPEN;
-    Wrapped.CLOSING = Orig.CLOSING;
-    Wrapped.CLOSED = Orig.CLOSED;
-    Wrapped.__qmdmb = true;
-    window.WebSocket = Wrapped;
+    proto.__qmdmb = true;
   }
 
   /* ---------- 面板渲染 ---------- */
