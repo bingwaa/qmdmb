@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.3.1
+// @version      1.3.2
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -413,6 +413,12 @@
       }
       if (op === 5 && hlen >= 16) {
         const body = new Uint8Array(buf, off + hlen, len - hlen);
+        if (DBG.samples.length < 5) {
+          DBG.samples.push({
+            len: len, hlen: hlen, ver: ver, size: len - hlen, bufLen: buf.byteLength,
+            hex: Array.from(body.subarray(0, 32)).map((x) => x.toString(16).padStart(2, '0')).join(' ')
+          });
+        }
         if (ver === 0) onMessages(new TextDecoder().decode(body));
         else if (ver === 2) {
           inflate(body).then((out) => {
@@ -480,7 +486,8 @@
   const DBG = {
     pageSend: 0, auth: 0, authOp: -1, authPatched: 0, authText: '', authReply: '',
     beat: 0, url: '', open: 0, close: 0, closeCode: 0, closeReason: '', err: 0,
-    msg: 0, frame: 0, ops: {}, vers: {}, sms: 0, jsonFail: 0, gift: 0, mine: 0
+    msg: 0, frame: 0, ops: {}, vers: {}, sms: 0, jsonFail: 0, gift: 0, mine: 0,
+    samples: []
   };
   window.__qmdmb = DBG;
   if (document.documentElement) document.documentElement.__qmdmb = DBG;
