@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.2.2
+// @version      1.2.3
 // @author       bingwaa
 // @description  在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @license      MIT
@@ -303,11 +303,15 @@
   }
 
   function loadGifts() {
+    const room = getRoomId();
     const key = giftKey();
     try {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const k = localStorage.key(i);
-        if (k && k.indexOf(GIFT_STORE) === 0 && k !== key) localStorage.removeItem(k);
+      if (room) {
+        const prefix = GIFT_STORE + GIFT_REV + '-' + room + '-';
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf(prefix) === 0 && k !== key) localStorage.removeItem(k);
+        }
       }
       const arr = JSON.parse(localStorage.getItem(key) || 'null');
       if (!Array.isArray(arr)) return;
@@ -524,7 +528,10 @@
         background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
         color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
-      #${PANEL_ID} .hd{font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
+      #${PANEL_ID} .hd{position:relative;padding-right:20px;font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
+      #${PANEL_ID} .x{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
+        color:#9a9a9a;cursor:pointer;font-size:15px;font-weight:400;border-radius:4px;}
+      #${PANEL_ID} .x:hover{color:#fff;background:rgba(255,255,255,.14);}
       #${PANEL_ID} .tag{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         padding:1px 6px;margin-left:8px;vertical-align:middle;}
       #${PANEL_ID} .dim{color:#9a9a9a;font-size:12px;}
@@ -647,6 +654,9 @@
     if (!p) {
       p = document.createElement('div');
       p.id = PANEL_ID;
+      p.addEventListener('click', (e) => {
+        if (e.target && e.target.classList && e.target.classList.contains('x')) p.remove();
+      });
       document.documentElement.appendChild(p);
     }
 
@@ -657,7 +667,7 @@
     if (!medal && !tasks) {
       p.innerHTML =
         '<div class="hd">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
-        ' <span class="' + live.cls + '">' + live.text + '</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span><span class="x" title="关闭">×</span></div>' +
         '<div class="dim">你尚未加入该主播的粉丝团。</div>' +
         (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '');
       return;
@@ -693,7 +703,7 @@
       '<div class="hd">' + esc(name) +
         ' <span class="tag">Lv.' + (medal && medal.level != null ? medal.level : '?') + '</span>' +
         (guard ? '<span class="tag">' + guard + '</span>' : '') +
-        ' <span class="' + live.cls + '">' + live.text + '</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span><span class="x" title="关闭">×</span></div>' +
       medalRows +
       storeRow +
       journeyHtml(s.journey) +
