@@ -6,12 +6,18 @@ B站直播间粉丝团亲密度任务面板。在直播间顶栏嵌入一个「�
 
 需要先安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [Violentmonkey](https://violentmonkey.github.io/)。
 
-[![安装脚本](https://img.shields.io/badge/安装脚本-Tampermonkey-2f7d32?style=for-the-badge)](https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.js)
+点击下方表格中的链接即可安装：
+
+| Github                                                                                     |
+| ------------------------------------------------------------------------------------------ |
+| [安装](https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js)                  |
+
+安装后由 Tampermonkey 依据脚本头部的 `@updateURL` 自动检查更新，版本号以 `@version` 是否增大为准。
 
 若点击后没有弹出安装页，在扩展的「实用工具 → 从 URL 安装」中粘贴：
 
 ```
-https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.js
+https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js
 ```
 
 ## 功能

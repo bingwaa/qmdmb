@@ -3,6 +3,8 @@
 // @namespace    local.qmdmb.bili-fan-medal
 // @version      1.2.0
 // @description  在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度(按当前房间主播uid取数)
+// @updateURL    https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js
+// @downloadURL  https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js
 // @match        https://live.bilibili.com/*
 // @grant        none
 // @run-at       document-start
