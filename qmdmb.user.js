@@ -791,6 +791,11 @@
     btn.style.setProperty('flex', '0 0 auto', 'important');
     btn.style.setProperty('cursor', 'pointer', 'important');
     btn.style.setProperty('user-select', 'none', 'important');
+    btn.querySelectorAll('.followed, .left-part').forEach((el) => {
+      el.style.setProperty('width', 'auto', 'important');
+      el.style.setProperty('min-width', '0', 'important');
+      el.style.setProperty('flex', '0 0 auto', 'important');
+    });
     return btn;
   }
 
