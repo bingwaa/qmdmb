@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.2.6
+// @version      1.2.7
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -42,6 +42,7 @@
   const LIGHT_GIFT = '粉丝团灯牌';
   const GIFT_STORE = 'qmdmb-gifts-';
   const GIFT_REV = 'v2';
+  const PATCH_PROTOVER = false;
 
   const TASKMETA = {
     feedLight: '投喂粉丝灯牌',
@@ -454,7 +455,7 @@
     proto.send = function (data) {
       try {
         if (typeof data === 'string') {
-          if (data.indexOf('protover') >= 0) {
+          if (PATCH_PROTOVER && data.indexOf('protover') >= 0) {
             data = data.replace(/"protover"\s*:\s*3/g, '"protover":2');
           }
         } else {
@@ -462,8 +463,10 @@
           if (u8 && findProtover(u8) >= 0) {
             const mu = /"uid"\s*:\s*(\d+)/.exec(textOf(data) || '');
             if (mu) myUidCache = Number(mu[1]);
-            const copy = u8.slice();
-            if (patchProtover(copy)) data = copy;
+            if (PATCH_PROTOVER) {
+              const copy = u8.slice();
+              if (patchProtover(copy)) data = copy;
+            }
           }
         }
       } catch (e) {}
