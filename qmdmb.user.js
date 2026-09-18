@@ -5,6 +5,7 @@
 // @version      1.2.3
 // @author       bingwaa
 // @description  在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
+// @description:en  Embed a button in the top bar of the Bilibili livestream room to display the streamer's fan club intimacy level
 // @license      MIT
 // @copyright    2026, bingwaa (https://github.com/bingwaa/qmdmb)
 // @homepageURL  https://github.com/bingwaa/qmdmb
