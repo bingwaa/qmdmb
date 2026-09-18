@@ -10,9 +10,9 @@
 
 点击下方表格中的链接即可安装：
 
-| Github                                                                                     |
-| ------------------------------------------------------------------------------------------ |
-| [安装](https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js)                  |
+| Github                                                                                     | GreasyFork                                                                         |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| [安装](https://raw.githubusercontent.com/bingwaa/qmdmb/main/qmdmb.user.js)                  | [安装](    https://update.greasyfork.org/scripts/596300/B%E7%AB%99%E7%9B%B4%E6%92%AD%E9%97%B4%E4%BA%B2%E5%AF%86%E5%BA%A6%E9%9D%A2%E6%9D%BF.user.js) |
 
 ## 功能
 
