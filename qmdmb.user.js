@@ -644,7 +644,7 @@
     foot += '</div>';
     const tFeed = medal && medal.today_feed != null ? Number(medal.today_feed) : null;
     if (tFeed != null && tFeed - total > 0) {
-      foot += '<div class="g-sum dim">其他（充电/投币）+' + (tFeed - total) + '</div>';
+      foot += '<div class="g-sum dim">其他（充电/投币/分享）+' + (tFeed - total) + '</div>';
     }
     return '<div class="gain"><div class="tt">今日亲密度增长明细</div>' + body + foot + '</div>';
   }
