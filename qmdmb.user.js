@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.3
+// @version      1.4.4
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -719,15 +719,22 @@
       '<div class="jseg">' + seg + '</div>' + stateRow + '</div>';
   }
 
-  let watchBase = null;
+  let watchServerSec = null;
+  let watchLiveMs = 0;
+  let watchLastAt = 0;
   let barCount = null;
   let countUid = 0;
   let countTimer = null;
   let countTick = 0;
 
+  function roomLive() {
+    return !!(renderArgs && renderArgs.room && renderArgs.room.liveStatus === 1);
+  }
+
+  /* 本地递增只在直播中累计，未开播时停在服务端值 */
   function watchSec() {
-    if (!watchBase) return null;
-    return watchBase.sec + Math.floor((Date.now() - watchBase.at) / 1000);
+    if (watchServerSec == null) return null;
+    return watchServerSec + Math.floor(watchLiveMs / 1000);
   }
 
   function watchText(sec) {
@@ -749,7 +756,9 @@
   function stopCounters() {
     clearInterval(countTimer);
     countTimer = null;
-    watchBase = null;
+    watchServerSec = null;
+    watchLiveMs = 0;
+    watchLastAt = 0;
     barCount = null;
     countTick = 0;
   }
@@ -757,10 +766,16 @@
   function startCounters(info, uid) {
     stopCounters();
     if (!info || (info.sec == null && info.bar == null)) return;
-    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
+    if (info.sec != null) {
+      watchServerSec = info.sec;
+      watchLastAt = Date.now();
+    }
     barCount = info.bar;
     countUid = uid;
     countTimer = setInterval(() => {
+      const now = Date.now();
+      if (watchLastAt && roomLive()) watchLiveMs += now - watchLastAt;
+      watchLastAt = now;
       paintCounters();
       if (++countTick % RESYNC_TICKS === 0) resyncCounters();
     }, 1000);
@@ -770,7 +785,10 @@
     if (!countUid || !document.getElementById(PANEL_ID)) return;
     const info = await fetchGuardActive(countUid);
     if (!info) return;
-    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
+    if (info.sec != null) {
+      watchServerSec = info.sec;
+      watchLiveMs = 0;
+    }
     if (info.bar != null) barCount = info.bar;
     paintCounters();
   }
