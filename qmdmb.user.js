@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.2
+// @version      1.4.3
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -26,8 +26,6 @@
   const STYLE_ID = 'qmdmb-fanpanel-style';
   const WATCH_ID = 'qmdmb-fanpanel-watch';
   const BAR_ID = 'qmdmb-fanpanel-bar';
-  const HEART_ID = 'qmdmb-fanpanel-heart';
-  const LOCAL_ID = 'qmdmb-fanpanel-local';
   const RESYNC_TICKS = 30;
   const TOAST_ID = 'qmdmb-fanpanel-toast';
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"]';
@@ -47,8 +45,6 @@
   const WS_SUB_RE = /\/sub(\?|$)/;
   const LIGHT_GIFT = '粉丝团灯牌';
   const GIFT_STORE = 'qmdmb-gifts-';
-  const HEART_STORE = 'qmdmb-heart-v1-';
-  const HEART_RE = /live-trace\.bilibili\.com\/xlive\/data-interface\/v1\/x25Kn\/([EX])/i;
   const GIFT_REV = 'v2';
 
   const OP_HEARTBEAT = 2;
@@ -599,147 +595,6 @@
     proto.__qmdmb = true;
   }
 
-  /* ---------- 观看时长心跳观测 ---------- */
-
-  let heartSec = 0;
-  let heartCnt = 0;
-  let heartTs = 0;
-
-  function heartKey() {
-    return HEART_STORE + getRoomId() + '-' + dayStamp();
-  }
-
-  function readHeart() {
-    try {
-      const v = JSON.parse(localStorage.getItem(heartKey()) || 'null');
-      if (v && typeof v === 'object') return { sec: Number(v.sec) || 0, cnt: Number(v.cnt) || 0 };
-    } catch (e) {}
-    return { sec: heartSec, cnt: heartCnt };
-  }
-
-  function loadHeart() {
-    const room = getRoomId();
-    try {
-      if (room) {
-        const prefix = HEART_STORE + room + '-';
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-          const k = localStorage.key(i);
-          if (k && k.indexOf(prefix) === 0 && k !== heartKey()) localStorage.removeItem(k);
-        }
-      }
-      const v = JSON.parse(localStorage.getItem(heartKey()) || 'null');
-      if (v && typeof v === 'object') {
-        heartSec = Number(v.sec) || 0;
-        heartCnt = Number(v.cnt) || 0;
-        heartTs = Number(v.ts) || 0;
-      }
-    } catch (e) {}
-  }
-
-  function saveHeart() {
-    try {
-      localStorage.setItem(heartKey(), JSON.stringify({ sec: heartSec, cnt: heartCnt, ts: heartTs }));
-    } catch (e) {}
-  }
-
-  /* 一次成功的 X 心跳代表服务端记入 heartbeat_interval 秒 */
-  function onHeartBeat(interval) {
-    const n = Number(interval);
-    if (!Number.isFinite(n) || n <= 0) return;
-    const cur = readHeart();
-    heartSec = cur.sec + n;
-    heartCnt = cur.cnt + 1;
-    heartTs = Date.now();
-    saveHeart();
-    if (renderArgs && !document.getElementById(HEART_ID)) rerender();
-  }
-
-  function heartFrom(j, kind) {
-    if (!j || j.code !== 0 || kind === 'E') return;
-    if (j.data) onHeartBeat(j.data.heartbeat_interval);
-  }
-
-  function installHeartHook() {
-    const XHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
-    if (XHR && !XHR.__qmdmbHooked) {
-      const origOpen = XHR.open;
-      const origSend = XHR.send;
-      XHR.open = function (method, url) {
-        try {
-          const m = HEART_RE.exec(String(url));
-          this.__qmdmbHeart = m ? m[1].toUpperCase() : '';
-        } catch (e) {}
-        return origOpen.apply(this, arguments);
-      };
-      XHR.send = function () {
-        if (this.__qmdmbHeart) {
-          const kind = this.__qmdmbHeart;
-          this.addEventListener('load', function () {
-            try {
-              heartFrom(
-                this.responseType === 'json' ? this.response : JSON.parse(this.responseText),
-                kind
-              );
-            } catch (e) {}
-          });
-        }
-        return origSend.apply(this, arguments);
-      };
-      XHR.__qmdmbHooked = true;
-    }
-    const origFetch = window.fetch;
-    if (origFetch && !origFetch.__qmdmb) {
-      const wrapped = function (input) {
-        const p = origFetch.apply(this, arguments);
-        try {
-          const url = typeof input === 'string' ? input : (input && input.url) || '';
-          const m = HEART_RE.exec(String(url));
-          if (m) {
-            const kind = m[1].toUpperCase();
-            p.then((r) => r.clone().json()).then((j) => heartFrom(j, kind)).catch(() => {});
-          }
-        } catch (e) {}
-        return p;
-      };
-      wrapped.__qmdmb = true;
-      window.fetch = wrapped;
-    }
-  }
-
-  function durText(sec) {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    if (h) return h + '小时' + m + '分';
-    if (m) return m + '分' + s + '秒';
-    return s + '秒';
-  }
-
-  function heartText() {
-    let t = '今日观时（心跳）：' + durText(heartSec) + ' · 心跳' + heartCnt + '次';
-    if (heartTs) t += ' · 最近' + Math.max(0, Math.round((Date.now() - heartTs) / 1000)) + '秒前';
-    return t;
-  }
-
-  function heartHtml() {
-    if (!heartCnt) return '';
-    return '<div class="row dim" id="' + HEART_ID + '">' + heartText() + '</div>';
-  }
-
-  /* 本次进入直播间时长：页面加载起累计，不判断播放状态 */
-  function localText() {
-    let t = '本次观时：' + durText(Math.floor((Date.now() - pageStart) / 1000));
-    if (serverDelta) {
-      t += ' · 服务端近' + serverDelta.span + '秒 +' + serverDelta.sec + '秒' +
-        (serverDelta.sec > 0 ? '' : '（未在计时）');
-    }
-    return t;
-  }
-
-  function localHtml() {
-    return '<div class="row dim" id="' + LOCAL_ID + '">' + localText() + '</div>';
-  }
-
   /* ---------- 面板渲染 ---------- */
 
   let renderArgs = null;
@@ -869,8 +724,6 @@
   let countUid = 0;
   let countTimer = null;
   let countTick = 0;
-  const pageStart = Date.now();
-  let serverDelta = null;
 
   function watchSec() {
     if (!watchBase) return null;
@@ -888,13 +741,9 @@
   function paintCounters() {
     const w = document.getElementById(WATCH_ID);
     const b = document.getElementById(BAR_ID);
-    const h = document.getElementById(HEART_ID);
-    const l = document.getElementById(LOCAL_ID);
     const sec = watchSec();
     if (w && sec != null) w.textContent = watchText(sec);
     if (b && barCount != null) b.textContent = barText(barCount);
-    if (h) h.textContent = heartText();
-    if (l) l.textContent = localText();
   }
 
   function stopCounters() {
@@ -907,14 +756,13 @@
 
   function startCounters(info, uid) {
     stopCounters();
-    if (info) {
-      if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
-      barCount = info.bar;
-      countUid = uid;
-    }
+    if (!info || (info.sec == null && info.bar == null)) return;
+    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
+    barCount = info.bar;
+    countUid = uid;
     countTimer = setInterval(() => {
       paintCounters();
-      if (countUid && ++countTick % RESYNC_TICKS === 0) resyncCounters();
+      if (++countTick % RESYNC_TICKS === 0) resyncCounters();
     }, 1000);
   }
 
@@ -922,16 +770,7 @@
     if (!countUid || !document.getElementById(PANEL_ID)) return;
     const info = await fetchGuardActive(countUid);
     if (!info) return;
-    if (info.sec != null) {
-      const now = Date.now();
-      if (watchBase) {
-        serverDelta = {
-          span: Math.max(1, Math.round((now - watchBase.at) / 1000)),
-          sec: info.sec - watchBase.sec
-        };
-      }
-      watchBase = { sec: info.sec, at: now };
-    }
+    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
     if (info.bar != null) barCount = info.bar;
     paintCounters();
   }
@@ -1051,8 +890,6 @@
       storeRow +
       watchHtml() +
       barHtml() +
-      heartHtml() +
-      localHtml() +
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
@@ -1225,8 +1062,6 @@
   }
 
   installWsHook();
-  installHeartHook();
-  loadHeart();
   loadGifts();
   loadUid();
 
