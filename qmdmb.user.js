@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.3.9
+// @version      1.4.0
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -26,6 +26,7 @@
   const STYLE_ID = 'qmdmb-fanpanel-style';
   const WATCH_ID = 'qmdmb-fanpanel-watch';
   const BAR_ID = 'qmdmb-fanpanel-bar';
+  const HEART_ID = 'qmdmb-fanpanel-heart';
   const RESYNC_TICKS = 30;
   const TOAST_ID = 'qmdmb-fanpanel-toast';
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"]';
@@ -45,6 +46,8 @@
   const WS_SUB_RE = /\/sub(\?|$)/;
   const LIGHT_GIFT = '粉丝团灯牌';
   const GIFT_STORE = 'qmdmb-gifts-';
+  const HEART_STORE = 'qmdmb-heart-v1-';
+  const HEART_RE = /live-trace\.bilibili\.com\/xlive\/data-interface\/v1\/x25Kn\/X/i;
   const GIFT_REV = 'v2';
 
   const OP_HEARTBEAT = 2;
@@ -595,6 +598,123 @@
     proto.__qmdmb = true;
   }
 
+  /* ---------- 观看时长心跳观测 ---------- */
+
+  let heartSec = 0;
+  let heartCnt = 0;
+  let heartTs = 0;
+
+  function heartKey() {
+    return HEART_STORE + getRoomId() + '-' + dayStamp();
+  }
+
+  function readHeart() {
+    try {
+      const v = JSON.parse(localStorage.getItem(heartKey()) || 'null');
+      if (v && typeof v === 'object') return { sec: Number(v.sec) || 0, cnt: Number(v.cnt) || 0 };
+    } catch (e) {}
+    return { sec: heartSec, cnt: heartCnt };
+  }
+
+  function loadHeart() {
+    const room = getRoomId();
+    try {
+      if (room) {
+        const prefix = HEART_STORE + room + '-';
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf(prefix) === 0 && k !== heartKey()) localStorage.removeItem(k);
+        }
+      }
+      const v = JSON.parse(localStorage.getItem(heartKey()) || 'null');
+      if (v && typeof v === 'object') {
+        heartSec = Number(v.sec) || 0;
+        heartCnt = Number(v.cnt) || 0;
+        heartTs = Number(v.ts) || 0;
+      }
+    } catch (e) {}
+  }
+
+  function saveHeart() {
+    try {
+      localStorage.setItem(heartKey(), JSON.stringify({ sec: heartSec, cnt: heartCnt, ts: heartTs }));
+    } catch (e) {}
+  }
+
+  /* 一次成功的 X 心跳代表服务端记入 heartbeat_interval 秒 */
+  function onHeartBeat(interval) {
+    const n = Number(interval);
+    if (!Number.isFinite(n) || n <= 0) return;
+    const cur = readHeart();
+    heartSec = cur.sec + n;
+    heartCnt = cur.cnt + 1;
+    heartTs = Date.now();
+    saveHeart();
+    if (renderArgs && !document.getElementById(HEART_ID)) rerender();
+  }
+
+  function heartFrom(j) {
+    if (j && j.code === 0 && j.data) onHeartBeat(j.data.heartbeat_interval);
+  }
+
+  function installHeartHook() {
+    const XHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+    if (XHR && !XHR.__qmdmbHeart) {
+      const origOpen = XHR.open;
+      const origSend = XHR.send;
+      XHR.open = function (method, url) {
+        try { this.__qmdmbHeart = HEART_RE.test(String(url)); } catch (e) {}
+        return origOpen.apply(this, arguments);
+      };
+      XHR.send = function () {
+        if (this.__qmdmbHeart) {
+          this.addEventListener('load', function () {
+            try {
+              heartFrom(this.responseType === 'json' ? this.response : JSON.parse(this.responseText));
+            } catch (e) {}
+          });
+        }
+        return origSend.apply(this, arguments);
+      };
+      XHR.__qmdmbHeart = true;
+    }
+    const origFetch = window.fetch;
+    if (origFetch && !origFetch.__qmdmb) {
+      const wrapped = function (input) {
+        const p = origFetch.apply(this, arguments);
+        try {
+          const url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (HEART_RE.test(String(url))) {
+            p.then((r) => r.clone().json()).then(heartFrom).catch(() => {});
+          }
+        } catch (e) {}
+        return p;
+      };
+      wrapped.__qmdmb = true;
+      window.fetch = wrapped;
+    }
+  }
+
+  function durText(sec) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h) return h + '小时' + m + '分';
+    if (m) return m + '分' + s + '秒';
+    return s + '秒';
+  }
+
+  function heartText() {
+    let t = '今日观时：' + durText(heartSec) + ' · 心跳' + heartCnt + '次';
+    if (heartTs) t += ' · 最近' + Math.max(0, Math.round((Date.now() - heartTs) / 1000)) + '秒前';
+    return t;
+  }
+
+  function heartHtml() {
+    if (!heartSec && !heartCnt) return '';
+    return '<div class="row dim" id="' + HEART_ID + '">' + heartText() + '</div>';
+  }
+
   /* ---------- 面板渲染 ---------- */
 
   let renderArgs = null;
@@ -741,9 +861,11 @@
   function paintCounters() {
     const w = document.getElementById(WATCH_ID);
     const b = document.getElementById(BAR_ID);
+    const h = document.getElementById(HEART_ID);
     const sec = watchSec();
     if (w && sec != null) w.textContent = watchText(sec);
     if (b && barCount != null) b.textContent = barText(barCount);
+    if (h) h.textContent = heartText();
   }
 
   function stopCounters() {
@@ -756,13 +878,14 @@
 
   function startCounters(info, uid) {
     stopCounters();
-    if (!info || (info.sec == null && info.bar == null)) return;
-    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
-    barCount = info.bar;
-    countUid = uid;
+    if (info) {
+      if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
+      barCount = info.bar;
+      countUid = uid;
+    }
     countTimer = setInterval(() => {
       paintCounters();
-      if (++countTick % RESYNC_TICKS === 0) resyncCounters();
+      if (countUid && ++countTick % RESYNC_TICKS === 0) resyncCounters();
     }, 1000);
   }
 
@@ -890,6 +1013,7 @@
       storeRow +
       watchHtml() +
       barHtml() +
+      heartHtml() +
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
@@ -1062,6 +1186,8 @@
   }
 
   installWsHook();
+  installHeartHook();
+  loadHeart();
   loadGifts();
   loadUid();
 
