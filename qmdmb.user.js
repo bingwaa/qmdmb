@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.0
+// @version      1.4.1
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -47,7 +47,7 @@
   const LIGHT_GIFT = '粉丝团灯牌';
   const GIFT_STORE = 'qmdmb-gifts-';
   const HEART_STORE = 'qmdmb-heart-v1-';
-  const HEART_RE = /live-trace\.bilibili\.com\/xlive\/data-interface\/v1\/x25Kn\/X/i;
+  const HEART_RE = /live-trace\.bilibili\.com\/xlive\/data-interface\/v1\/x25Kn\/([EX])/i;
   const GIFT_REV = 'v2';
 
   const OP_HEARTBEAT = 2;
@@ -603,6 +603,7 @@
   let heartSec = 0;
   let heartCnt = 0;
   let heartTs = 0;
+  let heartEnter = false;
 
   function heartKey() {
     return HEART_STORE + getRoomId() + '-' + dayStamp();
@@ -650,33 +651,44 @@
     heartCnt = cur.cnt + 1;
     heartTs = Date.now();
     saveHeart();
-    if (renderArgs && !document.getElementById(HEART_ID)) rerender();
   }
 
-  function heartFrom(j) {
-    if (j && j.code === 0 && j.data) onHeartBeat(j.data.heartbeat_interval);
+  function heartFrom(j, kind) {
+    if (!j || j.code !== 0) return;
+    if (kind === 'E') {
+      heartEnter = true;
+      return;
+    }
+    if (j.data) onHeartBeat(j.data.heartbeat_interval);
   }
 
   function installHeartHook() {
     const XHR = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
-    if (XHR && !XHR.__qmdmbHeart) {
+    if (XHR && !XHR.__qmdmbHooked) {
       const origOpen = XHR.open;
       const origSend = XHR.send;
       XHR.open = function (method, url) {
-        try { this.__qmdmbHeart = HEART_RE.test(String(url)); } catch (e) {}
+        try {
+          const m = HEART_RE.exec(String(url));
+          this.__qmdmbHeart = m ? m[1].toUpperCase() : '';
+        } catch (e) {}
         return origOpen.apply(this, arguments);
       };
       XHR.send = function () {
         if (this.__qmdmbHeart) {
+          const kind = this.__qmdmbHeart;
           this.addEventListener('load', function () {
             try {
-              heartFrom(this.responseType === 'json' ? this.response : JSON.parse(this.responseText));
+              heartFrom(
+                this.responseType === 'json' ? this.response : JSON.parse(this.responseText),
+                kind
+              );
             } catch (e) {}
           });
         }
         return origSend.apply(this, arguments);
       };
-      XHR.__qmdmbHeart = true;
+      XHR.__qmdmbHooked = true;
     }
     const origFetch = window.fetch;
     if (origFetch && !origFetch.__qmdmb) {
@@ -684,8 +696,10 @@
         const p = origFetch.apply(this, arguments);
         try {
           const url = typeof input === 'string' ? input : (input && input.url) || '';
-          if (HEART_RE.test(String(url))) {
-            p.then((r) => r.clone().json()).then(heartFrom).catch(() => {});
+          const m = HEART_RE.exec(String(url));
+          if (m) {
+            const kind = m[1].toUpperCase();
+            p.then((r) => r.clone().json()).then((j) => heartFrom(j, kind)).catch(() => {});
           }
         } catch (e) {}
         return p;
@@ -705,13 +719,16 @@
   }
 
   function heartText() {
+    if (!heartCnt) {
+      return '今日观时：' + durText(heartSec) +
+        (heartEnter ? ' · 已收到进入心跳，等待计时心跳' : ' · 未观测到心跳请求');
+    }
     let t = '今日观时：' + durText(heartSec) + ' · 心跳' + heartCnt + '次';
     if (heartTs) t += ' · 最近' + Math.max(0, Math.round((Date.now() - heartTs) / 1000)) + '秒前';
     return t;
   }
 
   function heartHtml() {
-    if (!heartSec && !heartCnt) return '';
     return '<div class="row dim" id="' + HEART_ID + '">' + heartText() + '</div>';
   }
 
