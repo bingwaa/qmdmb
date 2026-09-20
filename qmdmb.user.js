@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.1
+// @version      1.4.2
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -27,6 +27,7 @@
   const WATCH_ID = 'qmdmb-fanpanel-watch';
   const BAR_ID = 'qmdmb-fanpanel-bar';
   const HEART_ID = 'qmdmb-fanpanel-heart';
+  const LOCAL_ID = 'qmdmb-fanpanel-local';
   const RESYNC_TICKS = 30;
   const TOAST_ID = 'qmdmb-fanpanel-toast';
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"]';
@@ -603,7 +604,6 @@
   let heartSec = 0;
   let heartCnt = 0;
   let heartTs = 0;
-  let heartEnter = false;
 
   function heartKey() {
     return HEART_STORE + getRoomId() + '-' + dayStamp();
@@ -651,14 +651,11 @@
     heartCnt = cur.cnt + 1;
     heartTs = Date.now();
     saveHeart();
+    if (renderArgs && !document.getElementById(HEART_ID)) rerender();
   }
 
   function heartFrom(j, kind) {
-    if (!j || j.code !== 0) return;
-    if (kind === 'E') {
-      heartEnter = true;
-      return;
-    }
+    if (!j || j.code !== 0 || kind === 'E') return;
     if (j.data) onHeartBeat(j.data.heartbeat_interval);
   }
 
@@ -719,17 +716,28 @@
   }
 
   function heartText() {
-    if (!heartCnt) {
-      return '今日观时：' + durText(heartSec) +
-        (heartEnter ? ' · 已收到进入心跳，等待计时心跳' : ' · 未观测到心跳请求');
-    }
-    let t = '今日观时：' + durText(heartSec) + ' · 心跳' + heartCnt + '次';
+    let t = '今日观时（心跳）：' + durText(heartSec) + ' · 心跳' + heartCnt + '次';
     if (heartTs) t += ' · 最近' + Math.max(0, Math.round((Date.now() - heartTs) / 1000)) + '秒前';
     return t;
   }
 
   function heartHtml() {
+    if (!heartCnt) return '';
     return '<div class="row dim" id="' + HEART_ID + '">' + heartText() + '</div>';
+  }
+
+  /* 本次进入直播间时长：页面加载起累计，不判断播放状态 */
+  function localText() {
+    let t = '本次观时：' + durText(Math.floor((Date.now() - pageStart) / 1000));
+    if (serverDelta) {
+      t += ' · 服务端近' + serverDelta.span + '秒 +' + serverDelta.sec + '秒' +
+        (serverDelta.sec > 0 ? '' : '（未在计时）');
+    }
+    return t;
+  }
+
+  function localHtml() {
+    return '<div class="row dim" id="' + LOCAL_ID + '">' + localText() + '</div>';
   }
 
   /* ---------- 面板渲染 ---------- */
@@ -861,6 +869,8 @@
   let countUid = 0;
   let countTimer = null;
   let countTick = 0;
+  const pageStart = Date.now();
+  let serverDelta = null;
 
   function watchSec() {
     if (!watchBase) return null;
@@ -879,10 +889,12 @@
     const w = document.getElementById(WATCH_ID);
     const b = document.getElementById(BAR_ID);
     const h = document.getElementById(HEART_ID);
+    const l = document.getElementById(LOCAL_ID);
     const sec = watchSec();
     if (w && sec != null) w.textContent = watchText(sec);
     if (b && barCount != null) b.textContent = barText(barCount);
     if (h) h.textContent = heartText();
+    if (l) l.textContent = localText();
   }
 
   function stopCounters() {
@@ -910,7 +922,16 @@
     if (!countUid || !document.getElementById(PANEL_ID)) return;
     const info = await fetchGuardActive(countUid);
     if (!info) return;
-    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
+    if (info.sec != null) {
+      const now = Date.now();
+      if (watchBase) {
+        serverDelta = {
+          span: Math.max(1, Math.round((now - watchBase.at) / 1000)),
+          sec: info.sec - watchBase.sec
+        };
+      }
+      watchBase = { sec: info.sec, at: now };
+    }
     if (info.bar != null) barCount = info.bar;
     paintCounters();
   }
@@ -1031,6 +1052,7 @@
       watchHtml() +
       barHtml() +
       heartHtml() +
+      localHtml() +
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
