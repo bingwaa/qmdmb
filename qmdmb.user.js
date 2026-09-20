@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.3.5
+// @version      1.3.8
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -24,6 +24,7 @@
   const BTN_ID = 'qmdmb-fanpanel-btn';
   const PANEL_ID = 'qmdmb-fanpanel';
   const STYLE_ID = 'qmdmb-fanpanel-style';
+  const WATCH_ID = 'qmdmb-fanpanel-watch';
   const TOAST_ID = 'qmdmb-fanpanel-toast';
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"]';
   const FOLLOW_SEL = '.follow-ctnr[data-curbutton="unFollow"]';
@@ -34,6 +35,7 @@
   const API_MYMEDS = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/user/GetMyMedals';
   const API_ACTIVATED = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo';
   const API_COINEXP = 'https://api.bilibili.com/x/web-interface/coin/today/exp';
+  const API_GUARDACTIVE = 'https://api.live.bilibili.com/xlive/general-interface/v1/guard/GuardActive';
   const API_NAV = 'https://api.bilibili.com/x/web-interface/nav';
   const COIN_EXP_PER_COIN = 10;
   const GOLD_PER_BATTERY = 100;
@@ -182,6 +184,18 @@
         ('任务进度接口 code ' + (j.code != null ? j.code : '?'));
     }
     return { ok: false, reason };
+  }
+
+  async function fetchWatchTime(uid) {
+    if (!uid) return null;
+    try {
+      const j = await fetchJson(API_GUARDACTIVE + '?ruid=' + encodeURIComponent(uid) + '&platform=pc');
+      if (j.code !== 0 || !j.data) return null;
+      const sec = Number(j.data.watch_time);
+      return Number.isFinite(sec) && sec > 0 ? sec : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   async function fetchCoins() {
@@ -699,6 +713,59 @@
       '<div class="jseg">' + seg + '</div>' + stateRow + '</div>';
   }
 
+  let watchBase = null;
+  let watchUid = 0;
+  let watchTimer = null;
+  let watchTick = 0;
+
+  function watchSec() {
+    if (!watchBase) return null;
+    return watchBase.sec + Math.floor((Date.now() - watchBase.at) / 1000);
+  }
+
+  function watchText(sec) {
+    return '总观时：' + Math.floor(sec / 3600) + '小时(' + sec + '秒)';
+  }
+
+  function paintWatch() {
+    const el = document.getElementById(WATCH_ID);
+    const sec = watchSec();
+    if (!el || sec == null) return;
+    el.textContent = watchText(sec);
+  }
+
+  function stopWatch() {
+    clearInterval(watchTimer);
+    watchTimer = null;
+    watchBase = null;
+    watchTick = 0;
+  }
+
+  function startWatch(sec, uid) {
+    stopWatch();
+    if (sec == null) return;
+    watchBase = { sec: sec, at: Date.now() };
+    watchUid = uid;
+    watchTimer = setInterval(() => {
+      paintWatch();
+      if (++watchTick % 60 === 0) resyncWatch();
+    }, 1000);
+  }
+
+  async function resyncWatch() {
+    if (!watchUid || !document.getElementById(PANEL_ID)) return;
+    const sec = await fetchWatchTime(watchUid);
+    if (sec == null) return;
+    watchBase = { sec: sec, at: Date.now() };
+    paintWatch();
+  }
+
+  function watchHtml() {
+    const sec = watchSec();
+    if (sec == null) return '';
+    return '<div class="row" id="' + WATCH_ID + '">' + watchText(sec) + '</div>';
+  }
+
   function gainRowHtml(r) {
     return '<div class="g-row"><span class="gname">' + esc(r.name) + '</span>' +
       '<span class="gcnt">' + esc(r.mid) + '</span>' +
@@ -747,7 +814,10 @@
       p = document.createElement('div');
       p.id = PANEL_ID;
       p.addEventListener('click', (e) => {
-        if (e.target && e.target.classList && e.target.classList.contains('x')) p.remove();
+        if (e.target && e.target.classList && e.target.classList.contains('x')) {
+          stopWatch();
+          p.remove();
+        }
       });
       document.documentElement.appendChild(p);
     }
@@ -798,6 +868,7 @@
         ' <span class="' + live.cls + '">' + live.text + '</span><span class="x" title="关闭">×</span></div>' +
       medalRows +
       storeRow +
+      watchHtml() +
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
@@ -809,7 +880,8 @@
       const meta = await getRoomMeta(room.roomId);
       const medal = await getMyMedal(room.uid);
       const t = await fetchTasks(room.uid);
-      const coins = await fetchCoins();
+      const [coins, watch] = await Promise.all([fetchCoins(), fetchWatchTime(room.uid)]);
+      startWatch(watch, room.uid);
       renderPanel({
         room: { liveStatus: meta.liveStatus, uname: meta.uname },
         medal: medal,
@@ -829,8 +901,10 @@
 
   function togglePanel() {
     const p = document.getElementById(PANEL_ID);
-    if (p) p.remove();
-    else open();
+    if (p) {
+      stopWatch();
+      p.remove();
+    } else open();
   }
 
   function pick(sel) {
