@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.3.8
+// @version      1.3.9
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -25,6 +25,8 @@
   const PANEL_ID = 'qmdmb-fanpanel';
   const STYLE_ID = 'qmdmb-fanpanel-style';
   const WATCH_ID = 'qmdmb-fanpanel-watch';
+  const BAR_ID = 'qmdmb-fanpanel-bar';
+  const RESYNC_TICKS = 30;
   const TOAST_ID = 'qmdmb-fanpanel-toast';
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"]';
   const FOLLOW_SEL = '.follow-ctnr[data-curbutton="unFollow"]';
@@ -186,13 +188,17 @@
     return { ok: false, reason };
   }
 
-  async function fetchWatchTime(uid) {
+  async function fetchGuardActive(uid) {
     if (!uid) return null;
     try {
       const j = await fetchJson(API_GUARDACTIVE + '?ruid=' + encodeURIComponent(uid) + '&platform=pc');
       if (j.code !== 0 || !j.data) return null;
       const sec = Number(j.data.watch_time);
-      return Number.isFinite(sec) && sec > 0 ? sec : null;
+      const bar = Number(j.data.send_bar);
+      return {
+        sec: Number.isFinite(sec) && sec > 0 ? sec : null,
+        bar: Number.isFinite(bar) && bar > 0 ? bar : null
+      };
     } catch (e) {
       return null;
     }
@@ -714,9 +720,10 @@
   }
 
   let watchBase = null;
-  let watchUid = 0;
-  let watchTimer = null;
-  let watchTick = 0;
+  let barCount = null;
+  let countUid = 0;
+  let countTimer = null;
+  let countTick = 0;
 
   function watchSec() {
     if (!watchBase) return null;
@@ -724,46 +731,59 @@
   }
 
   function watchText(sec) {
-    return '总观时：' + Math.floor(sec / 3600) + '小时(' + sec + '秒)';
+    return '总观时：' + (sec / 3600).toFixed(2) + '小时(' + sec + '秒)';
   }
 
-  function paintWatch() {
-    const el = document.getElementById(WATCH_ID);
+  function barText(n) {
+    return '总发送弹幕数：' + n + '条';
+  }
+
+  function paintCounters() {
+    const w = document.getElementById(WATCH_ID);
+    const b = document.getElementById(BAR_ID);
     const sec = watchSec();
-    if (!el || sec == null) return;
-    el.textContent = watchText(sec);
+    if (w && sec != null) w.textContent = watchText(sec);
+    if (b && barCount != null) b.textContent = barText(barCount);
   }
 
-  function stopWatch() {
-    clearInterval(watchTimer);
-    watchTimer = null;
+  function stopCounters() {
+    clearInterval(countTimer);
+    countTimer = null;
     watchBase = null;
-    watchTick = 0;
+    barCount = null;
+    countTick = 0;
   }
 
-  function startWatch(sec, uid) {
-    stopWatch();
-    if (sec == null) return;
-    watchBase = { sec: sec, at: Date.now() };
-    watchUid = uid;
-    watchTimer = setInterval(() => {
-      paintWatch();
-      if (++watchTick % 60 === 0) resyncWatch();
+  function startCounters(info, uid) {
+    stopCounters();
+    if (!info || (info.sec == null && info.bar == null)) return;
+    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
+    barCount = info.bar;
+    countUid = uid;
+    countTimer = setInterval(() => {
+      paintCounters();
+      if (++countTick % RESYNC_TICKS === 0) resyncCounters();
     }, 1000);
   }
 
-  async function resyncWatch() {
-    if (!watchUid || !document.getElementById(PANEL_ID)) return;
-    const sec = await fetchWatchTime(watchUid);
-    if (sec == null) return;
-    watchBase = { sec: sec, at: Date.now() };
-    paintWatch();
+  async function resyncCounters() {
+    if (!countUid || !document.getElementById(PANEL_ID)) return;
+    const info = await fetchGuardActive(countUid);
+    if (!info) return;
+    if (info.sec != null) watchBase = { sec: info.sec, at: Date.now() };
+    if (info.bar != null) barCount = info.bar;
+    paintCounters();
   }
 
   function watchHtml() {
     const sec = watchSec();
     if (sec == null) return '';
     return '<div class="row" id="' + WATCH_ID + '">' + watchText(sec) + '</div>';
+  }
+
+  function barHtml() {
+    if (barCount == null) return '';
+    return '<div class="row" id="' + BAR_ID + '">' + barText(barCount) + '</div>';
   }
 
   function gainRowHtml(r) {
@@ -815,7 +835,7 @@
       p.id = PANEL_ID;
       p.addEventListener('click', (e) => {
         if (e.target && e.target.classList && e.target.classList.contains('x')) {
-          stopWatch();
+          stopCounters();
           p.remove();
         }
       });
@@ -869,6 +889,7 @@
       medalRows +
       storeRow +
       watchHtml() +
+      barHtml() +
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
@@ -880,8 +901,8 @@
       const meta = await getRoomMeta(room.roomId);
       const medal = await getMyMedal(room.uid);
       const t = await fetchTasks(room.uid);
-      const [coins, watch] = await Promise.all([fetchCoins(), fetchWatchTime(room.uid)]);
-      startWatch(watch, room.uid);
+      const [coins, guardActive] = await Promise.all([fetchCoins(), fetchGuardActive(room.uid)]);
+      startCounters(guardActive, room.uid);
       renderPanel({
         room: { liveStatus: meta.liveStatus, uname: meta.uname },
         medal: medal,
@@ -902,7 +923,7 @@
   function togglePanel() {
     const p = document.getElementById(PANEL_ID);
     if (p) {
-      stopWatch();
+      stopCounters();
       p.remove();
     } else open();
   }
