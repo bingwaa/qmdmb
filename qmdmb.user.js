@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.5
+// @version      1.4.6
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -45,6 +45,8 @@
   const DAY_MS = 24 * 3600 * 1000;
   const WS_SUB_RE = /\/sub(\?|$)/;
   const LIGHT_GIFT = '粉丝团灯牌';
+  const JOURNEY_GIFT = '亲密之旅';
+  const JOURNEY_EXTRA = 150;
   const GIFT_STORE = 'qmdmb-gifts-';
   const GIFT_REV = 'v2';
 
@@ -353,7 +355,12 @@
       giftRows.length = 0;
       arr.forEach((g) => {
         if (g && g.name) {
-          giftRows.push({ name: String(g.name), num: Number(g.num) || 0, battery: Number(g.battery) || 0 });
+          giftRows.push({
+            name: String(g.name),
+            num: Number(g.num) || 0,
+            battery: Number(g.battery) || 0,
+            extra: Number(g.extra) || 0
+          });
         }
       });
     } catch (e) {}
@@ -380,12 +387,15 @@
       }
       g.battery = g.num;
     }
+    /* 亲密之旅礼物在电池收益之外额外增加 150 亲密度 */
+    const extra = g.name === JOURNEY_GIFT ? JOURNEY_EXTRA * g.num : 0;
     const found = giftRows.find((x) => x.name === g.name);
     if (found) {
       found.num += g.num;
       found.battery += g.battery;
+      found.extra = (found.extra || 0) + extra;
     } else {
-      giftRows.push({ name: g.name, num: g.num, battery: g.battery });
+      giftRows.push({ name: g.name, num: g.num, battery: g.battery, extra: extra });
     }
     saveGifts();
     rerender();
@@ -882,7 +892,11 @@
         gained: Number(mm[1]) * Number(unit)
       });
     });
-    giftRows.forEach((g) => rows.push({ name: g.name, mid: '×' + g.num, gained: g.battery }));
+    giftRows.forEach((g) => rows.push({
+      name: g.name,
+      mid: '×' + g.num + (g.extra ? ' · 额外 +' + g.extra : ''),
+      gained: g.battery + (g.extra || 0)
+    }));
 
     const sum = rows.reduce((a, r) => a + r.gained, 0);
     let body = rows.length ? rows.map(gainRowHtml).join('') : '<div class="dim">今日暂无亲密度增长</div>';
