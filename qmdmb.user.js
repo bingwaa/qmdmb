@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.4
+// @version      1.4.5
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -26,6 +26,7 @@
   const STYLE_ID = 'qmdmb-fanpanel-style';
   const WATCH_ID = 'qmdmb-fanpanel-watch';
   const BAR_ID = 'qmdmb-fanpanel-bar';
+  const BEAT_ID = 'qmdmb-fanpanel-beat';
   const RESYNC_TICKS = 30;
   const TOAST_ID = 'qmdmb-fanpanel-toast';
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"]';
@@ -50,6 +51,7 @@
   const OP_HEARTBEAT = 2;
   const OP_AUTH = 7;
   const HEARTBEAT_MS = 30 * 1000;
+  const BEAT_TIMEOUT_MS = 45 * 1000;
   const RETRY_MS = 3 * 1000;
   const RETRY_MAX_MS = 60 * 1000;
 
@@ -309,13 +311,18 @@
     };
   }
 
+  /* total_coin 在连击时累加，不与 num 相乘；优先用单价 × 数量 */
+  function giftCoin(d, num) {
+    const price = Number(d.price) || 0;
+    const coin = price > 0 ? price * num : Number(d.total_coin) || 0;
+    return Math.floor(coin / GOLD_PER_BATTERY);
+  }
+
   function giftOf(d) {
     if (d.pb) return pbGift(d.pb);
     if (d.giftName || d.uid) {
       const num = Number(d.num) || 1;
-      const battery = String(d.coin_type) === 'gold'
-        ? Math.floor(((Number(d.total_coin) || 0) / GOLD_PER_BATTERY) * num)
-        : 0;
+      const battery = String(d.coin_type) === 'gold' ? giftCoin(d, num) : 0;
       return { uid: d.uid, name: String(d.giftName || '礼物'), num: num, battery: battery };
     }
     return null;
@@ -365,7 +372,12 @@
 
   function pushGift(g) {
     if (g.name === LIGHT_GIFT) {
-      if (!feedLightSeen && !feedTaskDone()) { feedLightSeen = true; return; }
+      if (!feedLightSeen && !feedTaskDone()) {
+        /* 首个灯牌记为点亮任务，批量投喂的其余个数仍按 +1 计入 */
+        feedLightSeen = true;
+        g.num -= 1;
+        if (g.num <= 0) return;
+      }
       g.battery = g.num;
     }
     const found = giftRows.find((x) => x.name === g.name);
@@ -407,14 +419,28 @@
     return len >= 16 && hl >= 16 && len <= b.length && op > 0 && op < 100;
   }
 
-  async function inflate(bytes) {
+  async function inflate(bytes, fmt) {
     if (!window.DecompressionStream) return null;
     try {
-      const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+      const s = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(fmt));
       return new Uint8Array(await new Response(s).arrayBuffer());
     } catch (e) {
       return null;
     }
+  }
+
+  function decodeBody(out) {
+    if (looksFrames(out)) readFrames(out);
+    else onMessages(new TextDecoder().decode(out));
+  }
+
+  function onInflated(p, ver) {
+    p.then((out) => {
+      if (out && out.length) decodeBody(out);
+      else if (++decodeFails === 1) {
+        console.warn('[qmdmb] 数据包解压失败 ver=' + ver + '，礼物与弹幕统计可能不完整');
+      }
+    });
   }
 
   function readFrames(u8) {
@@ -429,15 +455,9 @@
       if (len < 16 || off + len > buf.byteLength) break;
       if (op === 5 && hlen >= 16) {
         const body = new Uint8Array(buf, off + hlen, len - hlen);
-        if (ver === 2 || isZlib(body)) {
-          inflate(body).then((out) => {
-            if (!out || !out.length) return;
-            if (looksFrames(out)) readFrames(out);
-            else onMessages(new TextDecoder().decode(out));
-          });
-        } else if (ver === 0) {
-          onMessages(new TextDecoder().decode(body));
-        }
+        if (ver === 3) onInflated(inflate(body, 'brotli'), 3);
+        else if (ver === 2 || isZlib(body)) onInflated(inflate(body, 'deflate'), 2);
+        else if (ver === 0 || ver === 1) onMessages(new TextDecoder().decode(body));
       }
       off += len;
     }
@@ -513,7 +533,7 @@
     if (u8.length < 16) return;
     const op = packetOp(u8);
     if (op === OP_AUTH) acceptAuth(url, u8);
-    else if (op === OP_HEARTBEAT) { if (!ownBeat) ownBeat = u8.slice(); }
+    else if (op === OP_HEARTBEAT) { if (!ownBeat) ownBeat = u8.slice(); notePageBeat(url); }
   }
 
   function acceptAuth(url, auth) {
@@ -719,6 +739,38 @@
       '<div class="jseg">' + seg + '</div>' + stateRow + '</div>';
   }
 
+  /* ---------- WS 心跳观测：只记录观测值，不统计观看时长 ---------- */
+
+  let beatUrl = '';
+  let decodeFails = 0;
+  let beatAt = 0;
+  let beatPrev = 0;
+  let beatGap = 0;
+  let beatCount = 0;
+
+  function notePageBeat(url) {
+    const now = Date.now();
+    if (beatUrl === url && beatPrev) beatGap = now - beatPrev;
+    else { beatGap = 0; beatUrl = url; }
+    beatPrev = now;
+    beatAt = now;
+    beatCount++;
+  }
+
+  function beatText() {
+    const parts = [];
+    if (!beatAt) {
+      parts.push('WS心跳：等待页面心跳包');
+    } else {
+      const idle = Math.round((Date.now() - beatAt) / 1000);
+      parts.push('WS心跳：' + (idle * 1000 <= BEAT_TIMEOUT_MS ? '正常' : '中断'), '最近 ' + idle + ' 秒前');
+      if (beatGap > 0) parts.push('间隔 ' + Math.round(beatGap / 1000) + ' 秒');
+      parts.push('累计 ' + beatCount + ' 次');
+    }
+    if (decodeFails) parts.push('解压失败 ' + decodeFails + ' 包');
+    return parts.join(' · ');
+  }
+
   let watchServerSec = null;
   let watchLiveMs = 0;
   let watchLastAt = 0;
@@ -748,9 +800,11 @@
   function paintCounters() {
     const w = document.getElementById(WATCH_ID);
     const b = document.getElementById(BAR_ID);
+    const t = document.getElementById(BEAT_ID);
     const sec = watchSec();
     if (w && sec != null) w.textContent = watchText(sec);
     if (b && barCount != null) b.textContent = barText(barCount);
+    if (t) t.textContent = beatText();
   }
 
   function stopCounters() {
@@ -765,12 +819,13 @@
 
   function startCounters(info, uid) {
     stopCounters();
-    if (!info || (info.sec == null && info.bar == null)) return;
-    if (info.sec != null) {
-      watchServerSec = info.sec;
-      watchLastAt = Date.now();
+    if (info) {
+      if (info.sec != null) {
+        watchServerSec = info.sec;
+        watchLastAt = Date.now();
+      }
+      barCount = info.bar;
     }
-    barCount = info.bar;
     countUid = uid;
     countTimer = setInterval(() => {
       const now = Date.now();
@@ -802,6 +857,10 @@
   function barHtml() {
     if (barCount == null) return '';
     return '<div class="row" id="' + BAR_ID + '">' + barText(barCount) + '</div>';
+  }
+
+  function beatHtml() {
+    return '<div class="row dim" id="' + BEAT_ID + '">' + beatText() + '</div>';
   }
 
   function gainRowHtml(r) {
@@ -908,6 +967,7 @@
       storeRow +
       watchHtml() +
       barHtml() +
+      beatHtml() +
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
