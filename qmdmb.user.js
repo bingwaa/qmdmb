@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.1
+// @version      1.5.2
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -720,7 +720,7 @@
         width:max-content;min-width:300px;}
       #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;display:grid;
         grid-template-columns:max-content max-content max-content max-content max-content;
-        column-gap:10px;row-gap:9px;align-items:center;justify-content:start;white-space:nowrap;}
+        column-gap:10px;row-gap:6px;align-items:center;justify-content:start;white-space:nowrap;}
       #${LIVE_PANEL_ID} .list .dim{grid-column:1 / -1;}
       #${LIVE_PANEL_ID} .lv-n{color:#fff;overflow:hidden;text-overflow:ellipsis;}
       #${LIVE_PANEL_ID} .lv-medal{display:inline-flex;align-items:center;gap:3px;
@@ -1305,12 +1305,17 @@
           c1: medalColor(m.medal_color_start),
           c2: medalColor(m.medal_color_end),
           c3: medalColor(m.medal_color_border),
+          light: Number(m.is_lighted) || 0,
           live: s.live_status != null ? Number(s.live_status) : null,
           online: 0,
           roomid: s.room_id || m.roomid || 0
         };
       });
-      liveRows.sort((a, b) => (b.live === 1 ? 1 : 0) - (a.live === 1 ? 1 : 0) || b.level - a.level);
+      /* 点亮优先 → 直播中优先 → 等级降序 */
+      liveRows.sort((a, b) =>
+        (b.light ? 1 : 0) - (a.light ? 1 : 0) ||
+        (b.live === 1 ? 1 : 0) - (a.live === 1 ? 1 : 0) ||
+        b.level - a.level);
     } catch (e) {
       liveRows = [];
       toast('粉丝牌列表加载失败：' + e.message, false);
