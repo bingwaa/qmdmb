@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.0
+// @version      1.5.1
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -38,6 +38,7 @@
   const API_ROOM = 'https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom';
   const API_MYMEDS = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/user/GetMyMedals';
   const API_ROOMSTATUS = 'https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids';
+  const API_ONLINERANK = 'https://api.live.bilibili.com/xlive/general-interface/v1/rank/getOnlineGoldRank';
   const API_ACTIVATED = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo';
   const API_COINEXP = 'https://api.bilibili.com/x/web-interface/coin/today/exp';
   const API_GUARDACTIVE = 'https://api.live.bilibili.com/xlive/general-interface/v1/guard/GuardActive';
@@ -193,6 +194,17 @@
       } catch (e) {}
     }
     return map;
+  }
+
+  /* 单房间真实在线人数（在线榜 onlineNum），未开播为 0，失败返回 null */
+  async function fetchOnlineNum(roomid, uid) {
+    if (!roomid || !uid) return null;
+    try {
+      const j = await fetchJson(API_ONLINERANK + '?ruid=' + encodeURIComponent(uid) +
+        '&roomId=' + encodeURIComponent(roomid) + '&page=1&pageSize=1');
+      if (j.code === 0 && j.data && typeof j.data.onlineNum === 'number') return j.data.onlineNum;
+    } catch (e) {}
+    return null;
   }
 
   async function fetchTasks(uid) {
@@ -712,9 +724,10 @@
       #${LIVE_PANEL_ID} .list .dim{grid-column:1 / -1;}
       #${LIVE_PANEL_ID} .lv-n{color:#fff;overflow:hidden;text-overflow:ellipsis;}
       #${LIVE_PANEL_ID} .lv-medal{display:inline-flex;align-items:center;gap:3px;
-        height:18px;padding:0 7px 0 3px;border:1px solid;border-radius:9px;
-        color:#fff;font-size:12px;line-height:16px;}
+        height:18px;padding:0 7px;border:1px solid;border-radius:9px;
+        color:#fff;font-size:12px;line-height:16px;justify-self:end;}
       #${LIVE_PANEL_ID} .lv-medal b{font-weight:400;}
+      #${LIVE_PANEL_ID} .lv-medal.has-icon{padding:0 7px 0 3px;}
       #${LIVE_PANEL_ID} .lv-medal.icon-only{padding:0 2px;}
       #${LIVE_PANEL_ID} .lv-guard{display:inline-flex;align-items:center;justify-content:center;
         width:14px;height:14px;border-radius:50%;color:#fff;font-style:normal;}
@@ -1058,8 +1071,11 @@
   let liveRows = null;
   let liveLoading = false;
   let liveTimer = null;
+  let liveOnlineTimer = null;
   let liveRefreshing = false;
-  const LIVE_REFRESH_MS = 3000;
+  let liveOnlineRefreshing = false;
+  const LIVE_REFRESH_MS = 3000;    /* 直播状态：批量接口 */
+  const LIVE_ONLINE_MS = 15000;    /* 在线人数：逐房间接口 */
 
   function liveStatusInfo(st) {
     if (st === 1) return { cls: 'on', text: '直播中' };
@@ -1092,7 +1108,8 @@
       ? '<i class="lv-guard" style="background:' + gc + '" title="' + esc(GUARDNAME[r.guard] || '') + '">' +
         ANCHOR_SVG + '</i>'
       : '';
-    return '<span class="lv-medal' + (text ? '' : ' icon-only') + '" style="background:linear-gradient(90deg,' +
+    const cls = ic ? (text ? ' has-icon' : ' icon-only') : '';
+    return '<span class="lv-medal' + cls + '" style="background:linear-gradient(90deg,' +
       r.c1 + ',' + r.c2 + ');border-color:' + r.c3 + '">' + ic +
       (text ? '<b>' + text + '</b>' : '') + '</span>';
   }
@@ -1165,11 +1182,14 @@
   function stopLiveTimer() {
     clearInterval(liveTimer);
     liveTimer = null;
+    clearInterval(liveOnlineTimer);
+    liveOnlineTimer = null;
   }
 
   function startLiveTimer() {
     if (liveTimer) return;
     liveTimer = setInterval(refreshLive, LIVE_REFRESH_MS);
+    liveOnlineTimer = setInterval(refreshOnline, LIVE_ONLINE_MS);
   }
 
   /* 只改同接与状态文本，不重建列表，避免闪烁与滚动跳动 */
@@ -1199,16 +1219,52 @@
     try {
       const uids = liveRows.map((r) => r.uid).filter(Boolean);
       const st = await fetchRoomStatus(uids);
+      let wentLive = false;
       liveRows.forEach((r) => {
         const s = st[String(r.uid)];
         if (!s) return;
+        const wasLive = r.live === 1 || r.live === 2;
         if (s.live_status != null) r.live = Number(s.live_status);
-        r.online = Number(s.online) || 0;
+        if (r.live === 1 || r.live === 2) {
+          if (!wasLive) wentLive = true;
+        } else {
+          r.online = 0;
+        }
       });
       paintLiveRows();
+      if (wentLive) refreshOnline();
     } catch (e) {
     } finally {
       liveRefreshing = false;
+    }
+  }
+
+  function paintLiveOnline(i) {
+    const q = document.getElementById(LIVE_PANEL_ID);
+    const el = q && q.querySelector('.lv-on[data-i="' + i + '"]');
+    if (el && liveRows[i]) el.textContent = '同接 ' + fmtOnline(liveRows[i].online);
+  }
+
+  /* 逐房间取真实在线人数，仅查直播中/轮播中；串行请求以限制速率 */
+  async function refreshOnline() {
+    if (liveOnlineRefreshing || !liveRows || !liveRows.length) return;
+    if (!document.getElementById(LIVE_PANEL_ID)) {
+      stopLiveTimer();
+      return;
+    }
+    liveOnlineRefreshing = true;
+    try {
+      for (let i = 0; i < liveRows.length; i++) {
+        const r = liveRows[i];
+        if (r.live !== 1 && r.live !== 2) continue;
+        const n = await fetchOnlineNum(r.roomid, r.uid);
+        if (n == null) continue;
+        r.online = n;
+        paintLiveOnline(i);
+      }
+    } catch (e) {
+    } finally {
+      liveOnlineRefreshing = false;
     }
   }
 
@@ -1220,6 +1276,7 @@
     }
     if (document.getElementById(LIVE_PANEL_ID)) {
       refreshLive();
+      refreshOnline();
       startLiveTimer();
     }
   }
@@ -1249,7 +1306,7 @@
           c2: medalColor(m.medal_color_end),
           c3: medalColor(m.medal_color_border),
           live: s.live_status != null ? Number(s.live_status) : null,
-          online: Number(s.online) || 0,
+          online: 0,
           roomid: s.room_id || m.roomid || 0
         };
       });
@@ -1262,6 +1319,7 @@
     if (document.getElementById(LIVE_PANEL_ID)) {
       renderLivePanel();
       startLiveTimer();
+      refreshOnline();
     }
   }
 
