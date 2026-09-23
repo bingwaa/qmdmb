@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.6
+// @version      1.4.7
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -23,6 +23,7 @@
 
   const BTN_ID = 'qmdmb-fanpanel-btn';
   const PANEL_ID = 'qmdmb-fanpanel';
+  const LIVE_PANEL_ID = 'qmdmb-fanpanel-live';
   const STYLE_ID = 'qmdmb-fanpanel-style';
   const WATCH_ID = 'qmdmb-fanpanel-watch';
   const BAR_ID = 'qmdmb-fanpanel-bar';
@@ -36,6 +37,7 @@
   const API_ROOMINIT = 'https://api.live.bilibili.com/room/v1/Room/room_init';
   const API_ROOM = 'https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom';
   const API_MYMEDS = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/user/GetMyMedals';
+  const API_ROOMSTATUS = 'https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids';
   const API_ACTIVATED = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo';
   const API_COINEXP = 'https://api.bilibili.com/x/web-interface/coin/today/exp';
   const API_GUARDACTIVE = 'https://api.live.bilibili.com/xlive/general-interface/v1/guard/GuardActive';
@@ -162,6 +164,35 @@
       if (page >= totalPage || items.length === 0) break;
     }
     return null;
+  }
+
+  /* 分页遍历最多 10 页（page_size 上限 10），取全部持有粉丝牌 */
+  async function fetchAllMedals() {
+    const out = [];
+    for (let page = 1; page <= 10; page++) {
+      const j = await fetchJson(API_MYMEDS + '?page=' + page + '&page_size=10');
+      if (j.code !== 0) break;
+      const d = j.data || {};
+      const items = d.items || d.list || [];
+      items.forEach((x) => out.push(x));
+      const totalPage = (d.page_info && d.page_info.total_page) || 1;
+      if (page >= totalPage || items.length === 0) break;
+    }
+    return out;
+  }
+
+  /* 批量查询主播直播状态，data 以 uid 为键 */
+  async function fetchRoomStatus(uids) {
+    const map = {};
+    for (let i = 0; i < uids.length; i += 50) {
+      const part = uids.slice(i, i + 50);
+      const q = part.map((u) => 'uids[]=' + encodeURIComponent(u)).join('&');
+      try {
+        const j = await fetchJson(API_ROOMSTATUS + '?' + q);
+        if (j.code === 0 && j.data) Object.assign(map, j.data);
+      } catch (e) {}
+    }
+    return map;
   }
 
   async function fetchTasks(uid) {
@@ -665,48 +696,63 @@
     if (document.getElementById(STYLE_ID)) return;
     const st = document.createElement('style');
     st.id = STYLE_ID;
+    const P = '#' + PANEL_ID + ',#' + LIVE_PANEL_ID;
     st.textContent = `
-      #${PANEL_ID}{position:fixed;left:16px;bottom:64px;z-index:2147483000;width:300px;
+      ${P}{position:fixed;left:16px;bottom:64px;z-index:2147483000;width:300px;
         background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
         color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
-      #${PANEL_ID} .hd{position:relative;padding-right:20px;font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
-      #${PANEL_ID} .x{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
+      #${LIVE_PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;}
+      #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;}
+      #${LIVE_PANEL_ID} .lv-row{display:flex;align-items:center;gap:8px;margin:6px 0;}
+      #${LIVE_PANEL_ID} .lv-n{flex:1 1 auto;min-width:0;color:#fff;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      #${LIVE_PANEL_ID} .lv-s{flex:0 0 auto;font-size:12px;}
+      #${LIVE_PANEL_ID} .lv-go{flex:0 0 auto;font-size:12px;color:#fb7299;
+        border:1px solid #fb7299;border-radius:4px;padding:1px 6px;
+        text-decoration:none;white-space:nowrap;}
+      #${LIVE_PANEL_ID} .lv-go:hover{background:#fb7299;color:#fff;}
+      ${P} .hd{position:relative;padding-right:56px;font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
+      ${P} .x{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
         color:#9a9a9a;cursor:pointer;font-size:15px;font-weight:400;border-radius:4px;}
-      #${PANEL_ID} .x:hover{color:#fff;background:rgba(255,255,255,.14);}
-      #${PANEL_ID} .tag{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
+      ${P} .x:hover{color:#fff;background:rgba(255,255,255,.14);}
+      ${P} .lb{position:absolute;right:22px;top:1px;height:16px;line-height:16px;padding:0 4px;
+        color:#9a9a9a;cursor:pointer;font-size:12px;font-weight:400;border-radius:4px;}
+      ${P} .lb:hover{color:#fff;background:rgba(255,255,255,.14);}
+      ${P} .lb.on{color:#fb7299;}
+      ${P} .tag{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         padding:1px 6px;margin-left:8px;vertical-align:middle;}
-      #${PANEL_ID} .dim{color:#9a9a9a;font-size:12px;}
-      #${PANEL_ID} .save{margin:8px 0 0;color:#e6c07b;font-size:13px;}
-      #${PANEL_ID} .save b{color:#ffd97a;font-size:15px;}
-      #${PANEL_ID} .save-off{color:#9a9a9a;font-size:12px;}
-      #${PANEL_ID} .bar{height:8px;background:rgba(255,255,255,.12);border-radius:5px;overflow:hidden;margin:8px 0;}
-      #${PANEL_ID} .bar i{display:block;height:100%;background:linear-gradient(90deg,#fb7299,#ffb0c6);border-radius:5px;}
-      #${PANEL_ID} .row{margin:4px 0;}
-      #${PANEL_ID} .tasks{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      #${PANEL_ID} .tasks .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      #${PANEL_ID} .tasks .task{margin:8px 0;}
-      #${PANEL_ID} .t-row{display:flex;align-items:center;gap:8px;}
-      #${PANEL_ID} .t-row .n{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      #${PANEL_ID} .t-meta{margin-top:2px;color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      #${PANEL_ID} .p-pill{flex:0 0 auto;font-size:12px;border-radius:12px;padding:2px 10px;white-space:nowrap;}
-      #${PANEL_ID} .p-done{color:#9adc9a;border:1px solid #9adc9a;}
-      #${PANEL_ID} .p-action{color:#fff;background:#f0a13c;border:1px solid #f0a13c;}
-      #${PANEL_ID} .journey{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      #${PANEL_ID} .journey .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      #${PANEL_ID} .journey .tt span{font-weight:400;margin-left:6px;}
-      #${PANEL_ID} .jseg{display:flex;gap:4px;margin:8px 0 0;}
-      #${PANEL_ID} .jseg i{flex:1 1 0;height:8px;border-radius:3px;background:rgba(255,255,255,.12);}
-      #${PANEL_ID} .jseg i.on{background:linear-gradient(90deg,#fb7299,#ffb0c6);}
-      #${PANEL_ID} .gain{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      #${PANEL_ID} .gain .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      #${PANEL_ID} .g-row{display:flex;align-items:center;gap:8px;margin:5px 0;}
-      #${PANEL_ID} .gname{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      #${PANEL_ID} .gcnt{flex:0 0 auto;font-size:12px;color:#9a9a9a;}
-      #${PANEL_ID} .gplus{flex:0 0 auto;color:#7bd88f;font-weight:600;}
-      #${PANEL_ID} .g-sum{margin-top:7px;font-size:12px;color:#9a9a9a;}
-      #${PANEL_ID} .g-sum b{color:#ffd97a;font-size:14px;}
-      #${PANEL_ID} .off{color:#ff9a3c;} #${PANEL_ID} .on{color:#7bd88f;} #${PANEL_ID} .unk{color:#8a8a8a;}
+      ${P} .dim{color:#9a9a9a;font-size:12px;}
+      ${P} .save{margin:8px 0 0;color:#e6c07b;font-size:13px;}
+      ${P} .save b{color:#ffd97a;font-size:15px;}
+      ${P} .save-off{color:#9a9a9a;font-size:12px;}
+      ${P} .bar{height:8px;background:rgba(255,255,255,.12);border-radius:5px;overflow:hidden;margin:8px 0;}
+      ${P} .bar i{display:block;height:100%;background:linear-gradient(90deg,#fb7299,#ffb0c6);border-radius:5px;}
+      ${P} .row{margin:4px 0;}
+      ${P} .tasks{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
+      ${P} .tasks .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P} .tasks .task{margin:8px 0;}
+      ${P} .t-row{display:flex;align-items:center;gap:8px;}
+      ${P} .t-row .n{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P} .t-meta{margin-top:2px;color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P} .p-pill{flex:0 0 auto;font-size:12px;border-radius:12px;padding:2px 10px;white-space:nowrap;}
+      ${P} .p-done{color:#9adc9a;border:1px solid #9adc9a;}
+      ${P} .p-action{color:#fff;background:#f0a13c;border:1px solid #f0a13c;}
+      ${P} .journey{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
+      ${P} .journey .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P} .journey .tt span{font-weight:400;margin-left:6px;}
+      ${P} .jseg{display:flex;gap:4px;margin:8px 0 0;}
+      ${P} .jseg i{flex:1 1 0;height:8px;border-radius:3px;background:rgba(255,255,255,.12);}
+      ${P} .jseg i.on{background:linear-gradient(90deg,#fb7299,#ffb0c6);}
+      ${P} .gain{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
+      ${P} .gain .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P} .g-row{display:flex;align-items:center;gap:8px;margin:5px 0;}
+      ${P} .gname{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P} .gcnt{flex:0 0 auto;font-size:12px;color:#9a9a9a;}
+      ${P} .gplus{flex:0 0 auto;color:#7bd88f;font-weight:600;}
+      ${P} .g-sum{margin-top:7px;font-size:12px;color:#9a9a9a;}
+      ${P} .g-sum b{color:#ffd97a;font-size:14px;}
+      ${P} .off{color:#ff9a3c;} ${P} .on{color:#7bd88f;} ${P} .unk{color:#8a8a8a;}
     `;
     document.head.appendChild(st);
   }
@@ -925,9 +971,14 @@
       p = document.createElement('div');
       p.id = PANEL_ID;
       p.addEventListener('click', (e) => {
-        if (e.target && e.target.classList && e.target.classList.contains('x')) {
+        const t = e.target;
+        if (!t || !t.classList) return;
+        if (t.classList.contains('x')) {
           stopCounters();
+          closeLivePanel();
           p.remove();
+        } else if (t.classList.contains('lb')) {
+          toggleLivePanel();
         }
       });
       document.documentElement.appendChild(p);
@@ -940,9 +991,11 @@
     if (!medal && !tasks) {
       p.innerHTML =
         '<div class="hd">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
-        ' <span class="' + live.cls + '">' + live.text + '</span><span class="x" title="关闭">×</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
         '<div class="dim">你尚未加入该主播的粉丝团。</div>' +
         (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '');
+      toggleLiveBtn();
+      syncLiveBox();
       return;
     }
 
@@ -976,7 +1029,7 @@
       '<div class="hd">' + esc(name) +
         ' <span class="tag">Lv.' + (medal && medal.level != null ? medal.level : '?') + '</span>' +
         (guard ? '<span class="tag">' + guard + '</span>' : '') +
-        ' <span class="' + live.cls + '">' + live.text + '</span><span class="x" title="关闭">×</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
       medalRows +
       storeRow +
       watchHtml() +
@@ -985,6 +1038,110 @@
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       tasksSection;
+    toggleLiveBtn();
+    syncLiveBox();
+  }
+
+  /* ---------- 粉丝牌直播间面板 ---------- */
+
+  let liveRows = null;
+  let liveLoading = false;
+
+  function liveStatusInfo(st) {
+    if (st === 1) return { cls: 'on', text: '直播中' };
+    if (st === 2) return { cls: 'unk', text: '轮播中' };
+    if (st === 0) return { cls: 'off', text: '未开播' };
+    return { cls: 'unk', text: '未知' };
+  }
+
+  function liveListHtml() {
+    if (liveLoading && !liveRows) return '<div class="dim">加载中…</div>';
+    if (!liveRows) return '<div class="dim">暂无数据</div>';
+    if (!liveRows.length) return '<div class="dim">未持有粉丝牌</div>';
+    return liveRows.map((r) => {
+      const s = liveStatusInfo(r.live);
+      return '<div class="lv-row"><span class="lv-n">' + esc(r.uname) + '</span>' +
+        '<span class="lv-s ' + s.cls + '">' + s.text + '</span>' +
+        (r.roomid ? '<a class="lv-go" href="https://live.bilibili.com/' + r.roomid +
+          '" target="_blank" rel="noopener">进入</a>' : '') +
+        '</div>';
+    }).join('');
+  }
+
+  function liveBtnHtml() {
+    const on = document.getElementById(LIVE_PANEL_ID) ? ' on' : '';
+    return '<span class="lb' + on + '" title="粉丝牌直播间">牌</span>';
+  }
+
+  function toggleLiveBtn() {
+    const p = document.getElementById(PANEL_ID);
+    const btn = p && p.querySelector('.lb');
+    if (btn) btn.classList.toggle('on', !!document.getElementById(LIVE_PANEL_ID));
+  }
+
+  function renderLivePanel() {
+    let q = document.getElementById(LIVE_PANEL_ID);
+    if (!q) {
+      q = document.createElement('div');
+      q.id = LIVE_PANEL_ID;
+      q.addEventListener('click', (e) => {
+        if (e.target && e.target.classList && e.target.classList.contains('x')) closeLivePanel();
+      });
+      document.documentElement.appendChild(q);
+    }
+    q.innerHTML = '<div class="hd">粉丝牌直播间' +
+      (liveRows ? '<span class="dim"> ' + liveRows.length + ' 个</span>' : '') +
+      '<span class="x" title="关闭">×</span></div>' +
+      '<div class="list">' + liveListHtml() + '</div>';
+    syncLiveBox();
+    toggleLiveBtn();
+  }
+
+  /* 副面板贴主面板右侧 10px，高度与主面板一致 */
+  function syncLiveBox() {
+    const q = document.getElementById(LIVE_PANEL_ID);
+    const p = document.getElementById(PANEL_ID);
+    if (!q || !p) return;
+    const r = p.getBoundingClientRect();
+    q.style.left = Math.round(r.right + 10) + 'px';
+    q.style.height = Math.round(r.height) + 'px';
+  }
+
+  function closeLivePanel() {
+    const q = document.getElementById(LIVE_PANEL_ID);
+    if (q) q.remove();
+    toggleLiveBtn();
+  }
+
+  async function toggleLivePanel() {
+    if (document.getElementById(LIVE_PANEL_ID)) {
+      closeLivePanel();
+      return;
+    }
+    if (!document.getElementById(PANEL_ID)) return;
+    liveLoading = true;
+    liveRows = null;
+    renderLivePanel();
+    try {
+      const medals = await fetchAllMedals();
+      const uids = medals.map((m) => m.target_id).filter(Boolean);
+      const st = await fetchRoomStatus(uids);
+      liveRows = medals.map((m) => {
+        const s = st[String(m.target_id)] || {};
+        return {
+          uname: m.target_name || s.uname || m.uname || '主播',
+          live: s.live_status != null ? Number(s.live_status) : null,
+          roomid: s.room_id || m.roomid || 0,
+          level: Number(m.level) || 0
+        };
+      });
+      liveRows.sort((a, b) => (b.live === 1 ? 1 : 0) - (a.live === 1 ? 1 : 0) || b.level - a.level);
+    } catch (e) {
+      liveRows = [];
+      toast('粉丝牌列表加载失败：' + e.message, false);
+    }
+    liveLoading = false;
+    if (document.getElementById(LIVE_PANEL_ID)) renderLivePanel();
   }
 
   async function open() {
@@ -1016,6 +1173,7 @@
     const p = document.getElementById(PANEL_ID);
     if (p) {
       stopCounters();
+      closeLivePanel();
       p.remove();
     } else open();
   }
@@ -1150,7 +1308,10 @@
         t = setTimeout(init, 200);
       }).observe(document.body, { childList: true, subtree: true, attributes: true });
     }
-    setInterval(refreshBtnVisibility, 1000);
+    setInterval(() => {
+      refreshBtnVisibility();
+      syncLiveBox();
+    }, 1000);
   }
 
   installWsHook();
