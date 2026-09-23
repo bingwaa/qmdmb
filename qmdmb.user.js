@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.7
+// @version      1.4.8
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -696,9 +696,11 @@
     if (document.getElementById(STYLE_ID)) return;
     const st = document.createElement('style');
     st.id = STYLE_ID;
-    const P = '#' + PANEL_ID + ',#' + LIVE_PANEL_ID;
+    /* IDS 用于面板容器本身，P(sel) 展开成两个面板的同名后代选择器 */
+    const IDS = '#' + PANEL_ID + ',#' + LIVE_PANEL_ID;
+    const P = (sel) => '#' + PANEL_ID + ' ' + sel + ',#' + LIVE_PANEL_ID + ' ' + sel;
     st.textContent = `
-      ${P}{position:fixed;left:16px;bottom:64px;z-index:2147483000;width:300px;
+      ${IDS}{position:fixed;left:16px;bottom:64px;z-index:2147483000;width:300px;
         background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
         color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
@@ -712,47 +714,47 @@
         border:1px solid #fb7299;border-radius:4px;padding:1px 6px;
         text-decoration:none;white-space:nowrap;}
       #${LIVE_PANEL_ID} .lv-go:hover{background:#fb7299;color:#fff;}
-      ${P} .hd{position:relative;padding-right:56px;font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
-      ${P} .x{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
+      ${P('.hd')}{position:relative;padding-right:56px;font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
+      ${P('.x')}{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
         color:#9a9a9a;cursor:pointer;font-size:15px;font-weight:400;border-radius:4px;}
-      ${P} .x:hover{color:#fff;background:rgba(255,255,255,.14);}
-      ${P} .lb{position:absolute;right:22px;top:1px;height:16px;line-height:16px;padding:0 4px;
+      ${P('.x:hover')}{color:#fff;background:rgba(255,255,255,.14);}
+      ${P('.lb')}{position:absolute;right:22px;top:1px;height:16px;line-height:16px;padding:0 4px;
         color:#9a9a9a;cursor:pointer;font-size:12px;font-weight:400;border-radius:4px;}
-      ${P} .lb:hover{color:#fff;background:rgba(255,255,255,.14);}
-      ${P} .lb.on{color:#fb7299;}
-      ${P} .tag{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
+      ${P('.lb:hover')}{color:#fff;background:rgba(255,255,255,.14);}
+      ${P('.lb.on')}{color:#fb7299;}
+      ${P('.tag')}{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         padding:1px 6px;margin-left:8px;vertical-align:middle;}
-      ${P} .dim{color:#9a9a9a;font-size:12px;}
-      ${P} .save{margin:8px 0 0;color:#e6c07b;font-size:13px;}
-      ${P} .save b{color:#ffd97a;font-size:15px;}
-      ${P} .save-off{color:#9a9a9a;font-size:12px;}
-      ${P} .bar{height:8px;background:rgba(255,255,255,.12);border-radius:5px;overflow:hidden;margin:8px 0;}
-      ${P} .bar i{display:block;height:100%;background:linear-gradient(90deg,#fb7299,#ffb0c6);border-radius:5px;}
-      ${P} .row{margin:4px 0;}
-      ${P} .tasks{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      ${P} .tasks .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      ${P} .tasks .task{margin:8px 0;}
-      ${P} .t-row{display:flex;align-items:center;gap:8px;}
-      ${P} .t-row .n{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      ${P} .t-meta{margin-top:2px;color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      ${P} .p-pill{flex:0 0 auto;font-size:12px;border-radius:12px;padding:2px 10px;white-space:nowrap;}
-      ${P} .p-done{color:#9adc9a;border:1px solid #9adc9a;}
-      ${P} .p-action{color:#fff;background:#f0a13c;border:1px solid #f0a13c;}
-      ${P} .journey{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      ${P} .journey .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      ${P} .journey .tt span{font-weight:400;margin-left:6px;}
-      ${P} .jseg{display:flex;gap:4px;margin:8px 0 0;}
-      ${P} .jseg i{flex:1 1 0;height:8px;border-radius:3px;background:rgba(255,255,255,.12);}
-      ${P} .jseg i.on{background:linear-gradient(90deg,#fb7299,#ffb0c6);}
-      ${P} .gain{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      ${P} .gain .tt{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      ${P} .g-row{display:flex;align-items:center;gap:8px;margin:5px 0;}
-      ${P} .gname{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      ${P} .gcnt{flex:0 0 auto;font-size:12px;color:#9a9a9a;}
-      ${P} .gplus{flex:0 0 auto;color:#7bd88f;font-weight:600;}
-      ${P} .g-sum{margin-top:7px;font-size:12px;color:#9a9a9a;}
-      ${P} .g-sum b{color:#ffd97a;font-size:14px;}
-      ${P} .off{color:#ff9a3c;} ${P} .on{color:#7bd88f;} ${P} .unk{color:#8a8a8a;}
+      ${P('.dim')}{color:#9a9a9a;font-size:12px;}
+      ${P('.save')}{margin:8px 0 0;color:#e6c07b;font-size:13px;}
+      ${P('.save b')}{color:#ffd97a;font-size:15px;}
+      ${P('.save-off')}{color:#9a9a9a;font-size:12px;}
+      ${P('.bar')}{height:8px;background:rgba(255,255,255,.12);border-radius:5px;overflow:hidden;margin:8px 0;}
+      ${P('.bar i')}{display:block;height:100%;background:linear-gradient(90deg,#fb7299,#ffb0c6);border-radius:5px;}
+      ${P('.row')}{margin:4px 0;}
+      ${P('.tasks')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
+      ${P('.tasks .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.tasks .task')}{margin:8px 0;}
+      ${P('.t-row')}{display:flex;align-items:center;gap:8px;}
+      ${P('.t-row .n')}{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.t-meta')}{margin-top:2px;color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.p-pill')}{flex:0 0 auto;font-size:12px;border-radius:12px;padding:2px 10px;white-space:nowrap;}
+      ${P('.p-done')}{color:#9adc9a;border:1px solid #9adc9a;}
+      ${P('.p-action')}{color:#fff;background:#f0a13c;border:1px solid #f0a13c;}
+      ${P('.journey')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
+      ${P('.journey .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.journey .tt span')}{font-weight:400;margin-left:6px;}
+      ${P('.jseg')}{display:flex;gap:4px;margin:8px 0 0;}
+      ${P('.jseg i')}{flex:1 1 0;height:8px;border-radius:3px;background:rgba(255,255,255,.12);}
+      ${P('.jseg i.on')}{background:linear-gradient(90deg,#fb7299,#ffb0c6);}
+      ${P('.gain')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
+      ${P('.gain .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.g-row')}{display:flex;align-items:center;gap:8px;margin:5px 0;}
+      ${P('.gname')}{flex:1 1 auto;min-width:0;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.gcnt')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;}
+      ${P('.gplus')}{flex:0 0 auto;color:#7bd88f;font-weight:600;}
+      ${P('.g-sum')}{margin-top:7px;font-size:12px;color:#9a9a9a;}
+      ${P('.g-sum b')}{color:#ffd97a;font-size:14px;}
+      ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
     `;
     document.head.appendChild(st);
   }
