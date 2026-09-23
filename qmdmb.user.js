@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.8
+// @version      1.4.9
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -704,11 +704,20 @@
         background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
         color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
-      #${LIVE_PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;}
+      #${LIVE_PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
+        width:max-content;min-width:300px;}
       #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;}
-      #${LIVE_PANEL_ID} .lv-row{display:flex;align-items:center;gap:8px;margin:6px 0;}
+      #${LIVE_PANEL_ID} .lv-row{display:flex;align-items:center;gap:6px;margin:8px 0;white-space:nowrap;}
       #${LIVE_PANEL_ID} .lv-n{flex:1 1 auto;min-width:0;color:#fff;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      #${LIVE_PANEL_ID} .lv-medal{display:inline-flex;align-items:center;gap:3px;flex:0 1 auto;
+        min-width:0;height:18px;padding:0 7px 0 3px;border:1px solid;border-radius:9px;
+        color:#fff;font-size:12px;line-height:16px;overflow:hidden;}
+      #${LIVE_PANEL_ID} .lv-medal b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      #${LIVE_PANEL_ID} .lv-medal.icon-only{padding:0 2px;}
+      #${LIVE_PANEL_ID} .lv-guard{display:inline-flex;align-items:center;justify-content:center;
+        flex:0 0 auto;width:14px;height:14px;border-radius:50%;color:#fff;font-style:normal;}
+      #${LIVE_PANEL_ID} .lv-on{flex:0 0 auto;font-size:12px;color:#9a9a9a;}
       #${LIVE_PANEL_ID} .lv-s{flex:0 0 auto;font-size:12px;}
       #${LIVE_PANEL_ID} .lv-go{flex:0 0 auto;font-size:12px;color:#fb7299;
         border:1px solid #fb7299;border-radius:4px;padding:1px 6px;
@@ -1044,7 +1053,7 @@
     syncLiveBox();
   }
 
-  /* ---------- 粉丝牌直播间面板 ---------- */
+  /* ---------- 所有直播间面板 ---------- */
 
   let liveRows = null;
   let liveLoading = false;
@@ -1056,6 +1065,36 @@
     return { cls: 'unk', text: '未知' };
   }
 
+  function fmtOnline(n) {
+    const v = Number(n) || 0;
+    return v >= 10000 ? (v / 10000).toFixed(1) + '万' : String(v);
+  }
+
+  /* 十进制颜色值转 #rrggbb，必须补足 6 位 */
+  function medalColor(n) {
+    const v = Number(n) || 0;
+    return v > 0 ? '#' + v.toString(16).padStart(6, '0').slice(-6) : '#c9c9c9';
+  }
+
+  const GUARDCOLOR = { 1: '#e0523f', 2: '#9660e5', 3: '#22a0f5' };
+  const ANCHOR_SVG =
+    '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6">' +
+    '<circle cx="8" cy="3.2" r="1.9"/><path d="M8 5.1V14"/><path d="M4.4 6.6h7.2"/>' +
+    '<path d="M2.2 10.2c0 2.9 2.6 4.6 5.8 4.6s5.8-1.7 5.8-4.6"/></svg>';
+
+  function medalBadgeHtml(r) {
+    const text = [r.medal ? esc(r.medal) : '', r.level ? 'Lv.' + r.level : ''].filter(Boolean).join(' ');
+    const gc = GUARDCOLOR[r.guard];
+    if (!text && !gc) return '';
+    const ic = gc
+      ? '<i class="lv-guard" style="background:' + gc + '" title="' + esc(GUARDNAME[r.guard] || '') + '">' +
+        ANCHOR_SVG + '</i>'
+      : '';
+    return '<span class="lv-medal' + (text ? '' : ' icon-only') + '" style="background:linear-gradient(90deg,' +
+      r.c1 + ',' + r.c2 + ');border-color:' + r.c3 + '">' + ic +
+      (text ? '<b>' + text + '</b>' : '') + '</span>';
+  }
+
   function liveListHtml() {
     if (liveLoading && !liveRows) return '<div class="dim">加载中…</div>';
     if (!liveRows) return '<div class="dim">暂无数据</div>';
@@ -1063,6 +1102,8 @@
     return liveRows.map((r) => {
       const s = liveStatusInfo(r.live);
       return '<div class="lv-row"><span class="lv-n">' + esc(r.uname) + '</span>' +
+        medalBadgeHtml(r) +
+        (r.live === 1 ? '<span class="lv-on">同接 ' + fmtOnline(r.online) + '</span>' : '') +
         '<span class="lv-s ' + s.cls + '">' + s.text + '</span>' +
         (r.roomid ? '<a class="lv-go" href="https://live.bilibili.com/' + r.roomid +
           '" target="_blank" rel="noopener">进入</a>' : '') +
@@ -1072,7 +1113,7 @@
 
   function liveBtnHtml() {
     const on = document.getElementById(LIVE_PANEL_ID) ? ' on' : '';
-    return '<span class="lb' + on + '" title="粉丝牌直播间">牌</span>';
+    return '<span class="lb' + on + '" title="所有直播间">牌</span>';
   }
 
   function toggleLiveBtn() {
@@ -1091,7 +1132,7 @@
       });
       document.documentElement.appendChild(q);
     }
-    q.innerHTML = '<div class="hd">粉丝牌直播间' +
+    q.innerHTML = '<div class="hd">所有直播间' +
       (liveRows ? '<span class="dim"> ' + liveRows.length + ' 个</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
       '<div class="list">' + liveListHtml() + '</div>';
@@ -1105,8 +1146,10 @@
     const p = document.getElementById(PANEL_ID);
     if (!q || !p) return;
     const r = p.getBoundingClientRect();
-    q.style.left = Math.round(r.right + 10) + 'px';
+    const left = Math.round(r.right + 10);
+    q.style.left = left + 'px';
     q.style.height = Math.round(r.height) + 'px';
+    q.style.maxWidth = Math.max(300, window.innerWidth - left - 16) + 'px';
   }
 
   function closeLivePanel() {
@@ -1132,9 +1175,15 @@
         const s = st[String(m.target_id)] || {};
         return {
           uname: m.target_name || s.uname || m.uname || '主播',
+          medal: m.medal_name || '',
+          level: Number(m.level) || 0,
+          guard: Number(m.guard_level) || 0,
+          c1: medalColor(m.medal_color_start),
+          c2: medalColor(m.medal_color_end),
+          c3: medalColor(m.medal_color_border),
           live: s.live_status != null ? Number(s.live_status) : null,
-          roomid: s.room_id || m.roomid || 0,
-          level: Number(m.level) || 0
+          online: Number(s.online) || 0,
+          roomid: s.room_id || m.roomid || 0
         };
       });
       liveRows.sort((a, b) => (b.live === 1 ? 1 : 0) - (a.live === 1 ? 1 : 0) || b.level - a.level);
