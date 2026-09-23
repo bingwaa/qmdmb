@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.4.9
+// @version      1.5.0
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -706,22 +706,22 @@
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
       #${LIVE_PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
         width:max-content;min-width:300px;}
-      #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;}
-      #${LIVE_PANEL_ID} .lv-row{display:flex;align-items:center;gap:6px;margin:8px 0;white-space:nowrap;}
-      #${LIVE_PANEL_ID} .lv-n{flex:1 1 auto;min-width:0;color:#fff;
-        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      #${LIVE_PANEL_ID} .lv-medal{display:inline-flex;align-items:center;gap:3px;flex:0 1 auto;
-        min-width:0;height:18px;padding:0 7px 0 3px;border:1px solid;border-radius:9px;
-        color:#fff;font-size:12px;line-height:16px;overflow:hidden;}
-      #${LIVE_PANEL_ID} .lv-medal b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;display:grid;
+        grid-template-columns:max-content max-content max-content max-content max-content;
+        column-gap:10px;row-gap:9px;align-items:center;justify-content:start;white-space:nowrap;}
+      #${LIVE_PANEL_ID} .list .dim{grid-column:1 / -1;}
+      #${LIVE_PANEL_ID} .lv-n{color:#fff;overflow:hidden;text-overflow:ellipsis;}
+      #${LIVE_PANEL_ID} .lv-medal{display:inline-flex;align-items:center;gap:3px;
+        height:18px;padding:0 7px 0 3px;border:1px solid;border-radius:9px;
+        color:#fff;font-size:12px;line-height:16px;}
+      #${LIVE_PANEL_ID} .lv-medal b{font-weight:400;}
       #${LIVE_PANEL_ID} .lv-medal.icon-only{padding:0 2px;}
       #${LIVE_PANEL_ID} .lv-guard{display:inline-flex;align-items:center;justify-content:center;
-        flex:0 0 auto;width:14px;height:14px;border-radius:50%;color:#fff;font-style:normal;}
-      #${LIVE_PANEL_ID} .lv-on{flex:0 0 auto;font-size:12px;color:#9a9a9a;}
-      #${LIVE_PANEL_ID} .lv-s{flex:0 0 auto;font-size:12px;}
-      #${LIVE_PANEL_ID} .lv-go{flex:0 0 auto;font-size:12px;color:#fb7299;
-        border:1px solid #fb7299;border-radius:4px;padding:1px 6px;
-        text-decoration:none;white-space:nowrap;}
+        width:14px;height:14px;border-radius:50%;color:#fff;font-style:normal;}
+      #${LIVE_PANEL_ID} .lv-on{font-size:12px;color:#9a9a9a;}
+      #${LIVE_PANEL_ID} .lv-s{font-size:12px;}
+      #${LIVE_PANEL_ID} .lv-go{font-size:12px;color:#fb7299;border:1px solid #fb7299;
+        border-radius:4px;padding:1px 6px;text-decoration:none;justify-self:end;}
       #${LIVE_PANEL_ID} .lv-go:hover{background:#fb7299;color:#fff;}
       ${P('.hd')}{position:relative;padding-right:56px;font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
       ${P('.x')}{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
@@ -1057,6 +1057,9 @@
 
   let liveRows = null;
   let liveLoading = false;
+  let liveTimer = null;
+  let liveRefreshing = false;
+  const LIVE_REFRESH_MS = 3000;
 
   function liveStatusInfo(st) {
     if (st === 1) return { cls: 'on', text: '直播中' };
@@ -1066,8 +1069,7 @@
   }
 
   function fmtOnline(n) {
-    const v = Number(n) || 0;
-    return v >= 10000 ? (v / 10000).toFixed(1) + '万' : String(v);
+    return String(Number(n) || 0);
   }
 
   /* 十进制颜色值转 #rrggbb，必须补足 6 位 */
@@ -1083,9 +1085,9 @@
     '<path d="M2.2 10.2c0 2.9 2.6 4.6 5.8 4.6s5.8-1.7 5.8-4.6"/></svg>';
 
   function medalBadgeHtml(r) {
-    const text = [r.medal ? esc(r.medal) : '', r.level ? 'Lv.' + r.level : ''].filter(Boolean).join(' ');
+    const text = [r.medal ? esc(r.medal) : '', r.level ? String(r.level) : ''].filter(Boolean).join('');
     const gc = GUARDCOLOR[r.guard];
-    if (!text && !gc) return '';
+    if (!text && !gc) return '<span></span>';
     const ic = gc
       ? '<i class="lv-guard" style="background:' + gc + '" title="' + esc(GUARDNAME[r.guard] || '') + '">' +
         ANCHOR_SVG + '</i>'
@@ -1099,15 +1101,16 @@
     if (liveLoading && !liveRows) return '<div class="dim">加载中…</div>';
     if (!liveRows) return '<div class="dim">暂无数据</div>';
     if (!liveRows.length) return '<div class="dim">未持有粉丝牌</div>';
-    return liveRows.map((r) => {
+    return liveRows.map((r, i) => {
       const s = liveStatusInfo(r.live);
-      return '<div class="lv-row"><span class="lv-n">' + esc(r.uname) + '</span>' +
+      const go = r.roomid
+        ? '<a class="lv-go" href="https://live.bilibili.com/' + r.roomid +
+          '" target="_blank" rel="noopener">进入</a>'
+        : '<span></span>';
+      return '<span class="lv-n">' + esc(r.uname) + '</span>' +
         medalBadgeHtml(r) +
-        (r.live === 1 ? '<span class="lv-on">同接 ' + fmtOnline(r.online) + '</span>' : '') +
-        '<span class="lv-s ' + s.cls + '">' + s.text + '</span>' +
-        (r.roomid ? '<a class="lv-go" href="https://live.bilibili.com/' + r.roomid +
-          '" target="_blank" rel="noopener">进入</a>' : '') +
-        '</div>';
+        '<span class="lv-on" data-i="' + i + '">同接 ' + fmtOnline(r.online) + '</span>' +
+        '<span class="lv-s ' + s.cls + '" data-i="' + i + '">' + s.text + '</span>' + go;
     }).join('');
   }
 
@@ -1153,9 +1156,72 @@
   }
 
   function closeLivePanel() {
+    stopLiveTimer();
     const q = document.getElementById(LIVE_PANEL_ID);
     if (q) q.remove();
     toggleLiveBtn();
+  }
+
+  function stopLiveTimer() {
+    clearInterval(liveTimer);
+    liveTimer = null;
+  }
+
+  function startLiveTimer() {
+    if (liveTimer) return;
+    liveTimer = setInterval(refreshLive, LIVE_REFRESH_MS);
+  }
+
+  /* 只改同接与状态文本，不重建列表，避免闪烁与滚动跳动 */
+  function paintLiveRows() {
+    const q = document.getElementById(LIVE_PANEL_ID);
+    if (!q || !liveRows) return;
+    q.querySelectorAll('.lv-on,.lv-s').forEach((el) => {
+      const r = liveRows[Number(el.getAttribute('data-i'))];
+      if (!r) return;
+      if (el.classList.contains('lv-on')) {
+        el.textContent = '同接 ' + fmtOnline(r.online);
+        return;
+      }
+      const s = liveStatusInfo(r.live);
+      el.textContent = s.text;
+      el.className = 'lv-s ' + s.cls;
+    });
+  }
+
+  async function refreshLive() {
+    if (liveRefreshing || !liveRows || !liveRows.length) return;
+    if (!document.getElementById(LIVE_PANEL_ID)) {
+      stopLiveTimer();
+      return;
+    }
+    liveRefreshing = true;
+    try {
+      const uids = liveRows.map((r) => r.uid).filter(Boolean);
+      const st = await fetchRoomStatus(uids);
+      liveRows.forEach((r) => {
+        const s = st[String(r.uid)];
+        if (!s) return;
+        if (s.live_status != null) r.live = Number(s.live_status);
+        r.online = Number(s.online) || 0;
+      });
+      paintLiveRows();
+    } catch (e) {
+    } finally {
+      liveRefreshing = false;
+    }
+  }
+
+  /* 页面切到后台时暂停轮询，回到前台立即刷新一次 */
+  function onVisibilityChange() {
+    if (document.hidden) {
+      stopLiveTimer();
+      return;
+    }
+    if (document.getElementById(LIVE_PANEL_ID)) {
+      refreshLive();
+      startLiveTimer();
+    }
   }
 
   async function toggleLivePanel() {
@@ -1174,6 +1240,7 @@
       liveRows = medals.map((m) => {
         const s = st[String(m.target_id)] || {};
         return {
+          uid: m.target_id,
           uname: m.target_name || s.uname || m.uname || '主播',
           medal: m.medal_name || '',
           level: Number(m.level) || 0,
@@ -1192,7 +1259,10 @@
       toast('粉丝牌列表加载失败：' + e.message, false);
     }
     liveLoading = false;
-    if (document.getElementById(LIVE_PANEL_ID)) renderLivePanel();
+    if (document.getElementById(LIVE_PANEL_ID)) {
+      renderLivePanel();
+      startLiveTimer();
+    }
   }
 
   async function open() {
@@ -1368,6 +1438,7 @@
   installWsHook();
   loadGifts();
   loadUid();
+  document.addEventListener('visibilitychange', onVisibilityChange);
 
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
