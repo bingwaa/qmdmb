@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.2
+// @version      1.5.3
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -45,10 +45,12 @@
   const API_NAV = 'https://api.bilibili.com/x/web-interface/nav';
   const COIN_EXP_PER_COIN = 10;
   const GOLD_PER_BATTERY = 100;
+  const GOLD_PER_YUAN = 1000;
   const DAY_MS = 24 * 3600 * 1000;
   const WS_SUB_RE = /\/sub(\?|$)/;
   const LIGHT_GIFT = '粉丝团灯牌';
   const JOURNEY_GIFT = '亲密之旅';
+  const SC_GIFT = '超级留言';
   const JOURNEY_EXTRA = 150;
   const GIFT_STORE = 'qmdmb-gifts-';
   const GIFT_REV = 'v2';
@@ -89,6 +91,7 @@
     '直播间外：给主播充电（1 B 币）'
   ];
   const GUARDNAME = { 1: '总督', 2: '提督', 3: '舰长' };
+  const GUARDLEVEL = { 总督: 1, 提督: 2, 舰长: 3 };
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -375,6 +378,85 @@
 
   /* ---------- 礼物累计与存储 ---------- */
 
+  /* SUPER_CHAT_MESSAGE 与 _JPN 同时下发同一 id，去重后只计一次 */
+  const SC_SEEN_MAX = 50;
+  const scSeen = [];
+
+  function scOf(d) {
+    const id = Number(d.id) || 0;
+    if (!id || scSeen.indexOf(id) >= 0) return null;
+    scSeen.push(id);
+    if (scSeen.length > SC_SEEN_MAX) scSeen.shift();
+    const price = Number(d.price) || 0;
+    const rate = Number(d.rate) || 1000;
+    return {
+      uid: d.uid,
+      name: price > 0 ? SC_GIFT + ' ' + price + '元' : SC_GIFT,
+      num: 1,
+      battery: Math.floor((price * rate) / GOLD_PER_BATTERY)
+    };
+  }
+
+  /* 同一笔大航海会下发 GUARD_BUY、USER_TOAST_MSG 与 SEND_GIFT，按 用户+等级+金额 指纹去重 */
+  const GUARD_DEDUP_MS = 15000;
+  const guardSeen = [];
+
+  function guardDup(key) {
+    const now = Date.now();
+    for (let i = guardSeen.length - 1; i >= 0; i--) {
+      if (now - guardSeen[i].t > GUARD_DEDUP_MS) guardSeen.splice(i, 1);
+    }
+    if (guardSeen.some((x) => x.k === key)) return true;
+    guardSeen.push({ k: key, t: now });
+    return false;
+  }
+
+  /* price 为金瓜子时不低于 13.8 万，为元时为 138 / 1998 / 19998 */
+  function guardGold(d) {
+    const price = Number(d.price) || 0;
+    if (!price) return 0;
+    return price >= 1000 ? price : price * (Number(d.rate) || 1000);
+  }
+
+  function guardRow(uid, level, gold) {
+    const unit = gold / GOLD_PER_BATTERY;
+    return {
+      uid: uid,
+      name: GUARDNAME[level] + ' ' + Math.round(gold / GOLD_PER_YUAN) + '元',
+      num: 1,
+      battery: Math.floor(unit)
+    };
+  }
+
+  function guardOf(d) {
+    const level = Number(d.guard_level) || 0;
+    if (!GUARDNAME[level]) return null;
+    const gold = guardGold(d);
+    if (!gold) return null;
+    if (guardDup([d.uid, level, gold].join('|'))) return null;
+    return guardRow(d.uid, level, gold);
+  }
+
+  /* pb 通道若已给出大航海电池数，则直接换算，避免与 GUARD_BUY 重复计入 */
+  function guardGiftOf(g) {
+    const level = GUARDLEVEL[g.name];
+    if (!level) return g;
+    if (!g.battery) return null;
+    const gold = g.battery * GOLD_PER_BATTERY;
+    if (guardDup([g.uid, level, gold].join('|'))) return null;
+    return guardRow(g.uid, level, gold);
+  }
+
+  function giftByCmd(cmd, data) {
+    if (cmd.indexOf('SEND_GIFT') === 0) {
+      const g = giftOf(data);
+      return g ? guardGiftOf(g) : null;
+    }
+    if (cmd.indexOf('SUPER_CHAT_MESSAGE') === 0) return scOf(data);
+    if (cmd.indexOf('GUARD_BUY') === 0 || cmd.indexOf('USER_TOAST_MSG') === 0) return guardOf(data);
+    return null;
+  }
+
   const giftRows = [];
   let feedLightSeen = false;
 
@@ -453,9 +535,9 @@
     const me = myUid();
     for (let i = 0; i < arr.length; i++) {
       const m = arr[i];
-      if (!m || typeof m.cmd !== 'string' || m.cmd.indexOf('SEND_GIFT') !== 0) continue;
-      const g = giftOf(m.data || {});
-      if (g && me && String(g.uid) === String(me)) pushGift(g);
+      if (!m || typeof m.cmd !== 'string') continue;
+      const gift = giftByCmd(m.cmd, m.data || {});
+      if (gift && me && String(gift.uid) === String(me)) pushGift(gift);
     }
   }
 
