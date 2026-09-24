@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.3
+// @version      1.5.4
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -314,8 +314,9 @@
 
   /* ---------- protobuf 扫描 ---------- */
 
+  /* 按出现顺序返回全部字段，同一字段号可重复（gift_list） */
   function pbScan(b, start, end) {
-    const out = {};
+    const out = [];
     let i = start;
     while (i < end) {
       let key = 0, sh = 0, x;
@@ -324,11 +325,11 @@
       if (w === 0) {
         let v = 0; sh = 0;
         do { x = b[i++]; v += (x & 0x7f) * 2 ** sh; sh += 7; } while (x & 0x80);
-        out[f] = { n: v };
+        out.push({ f: f, n: v });
       } else if (w === 2) {
         let n = 0; sh = 0;
         do { x = b[i++]; n += (x & 0x7f) * 2 ** sh; sh += 7; } while (x & 0x80);
-        out[f] = { s: i, e: i + n };
+        out.push({ f: f, s: i, e: i + n });
         i += n;
       } else if (w === 5) i += 4;
       else if (w === 1) i += 8;
@@ -337,26 +338,45 @@
     return out;
   }
 
+  function pbAll(list, f) {
+    return list.filter((x) => x.f === f);
+  }
+
+  function pbOne(list, f) {
+    return pbAll(list, f)[0] || null;
+  }
+
   function pbText(b, f) {
     return new TextDecoder().decode(b.subarray(f.s, f.e));
   }
 
-  function pbGift(b64) {
+  /* SendGiftBroadcast：gift_list 为重复字段，盲盒批量开出时每项各自计价 */
+  function pbGifts(b64) {
     let buf;
-    try { buf = b64ToU8(b64); } catch (e) { return null; }
+    try { buf = b64ToU8(b64); } catch (e) { return []; }
     const top = pbScan(buf, 0, buf.length);
-    if (!top[1] || !top[1].n) return null;
-    const g = top[10] ? pbScan(buf, top[10].s, top[10].e) : {};
-    const name = g[2] ? pbText(buf, g[2]) : '礼物';
-    const num = g[3] && g[3].n ? g[3].n : 1;
-    const price = g[5] && g[5].n ? g[5].n : 0;
-    const coin = g[8] ? pbText(buf, g[8]) : '';
-    return {
-      uid: top[1].n,
-      name: name,
-      num: num,
-      battery: coin === 'gold' ? Math.floor((price * num) / GOLD_PER_BATTERY) : 0
-    };
+    const uid = pbOne(top, 1);
+    if (!uid || !uid.n) return [];
+    const blindF = pbOne(top, 9);
+    const boxF = blindF ? pbOne(pbScan(buf, blindF.s, blindF.e), 3) : null;
+    const box = boxF ? pbText(buf, boxF) : '';
+    return pbAll(top, 10).map((item) => {
+      const g = pbScan(buf, item.s, item.e);
+      const nameF = pbOne(g, 2);
+      const numF = pbOne(g, 3);
+      const priceF = pbOne(g, 5);
+      const coinF = pbOne(g, 8);
+      const num = numF && numF.n ? numF.n : 1;
+      const price = priceF && priceF.n ? priceF.n : 0;
+      const coin = coinF ? pbText(buf, coinF) : '';
+      const name = nameF ? pbText(buf, nameF) : '礼物';
+      return {
+        uid: uid.n,
+        name: box ? box + '(' + name + ')' : name,
+        num: num,
+        battery: coin === 'gold' ? Math.floor((price * num) / GOLD_PER_BATTERY) : 0
+      };
+    });
   }
 
   /* total_coin 在连击时累加，不与 num 相乘；优先用单价 × 数量 */
@@ -366,14 +386,16 @@
     return Math.floor(coin / GOLD_PER_BATTERY);
   }
 
-  function giftOf(d) {
-    if (d.pb) return pbGift(d.pb);
+  function giftsOf(d) {
+    if (d.pb) return pbGifts(d.pb);
     if (d.giftName || d.uid) {
       const num = Number(d.num) || 1;
       const battery = String(d.coin_type) === 'gold' ? giftCoin(d, num) : 0;
-      return { uid: d.uid, name: String(d.giftName || '礼物'), num: num, battery: battery };
+      const gift = String(d.giftName || '礼物');
+      const box = d.blind_gift ? String(d.blind_gift.original_gift_name || '') : '';
+      return [{ uid: d.uid, name: box ? box + '(' + gift + ')' : gift, num: num, battery: battery }];
     }
-    return null;
+    return [];
   }
 
   /* ---------- 礼物累计与存储 ---------- */
@@ -431,7 +453,7 @@
   function guardOf(d) {
     const level = Number(d.guard_level) || 0;
     if (!GUARDNAME[level]) return null;
-    const gold = guardGold(d);
+    const gold = guardGold(d) * (Number(d.num) || 1);
     if (!gold) return null;
     if (guardDup([d.uid, level, gold].join('|'))) return null;
     return guardRow(d.uid, level, gold);
@@ -447,14 +469,17 @@
     return guardRow(g.uid, level, gold);
   }
 
-  function giftByCmd(cmd, data) {
-    if (cmd.indexOf('SEND_GIFT') === 0) {
-      const g = giftOf(data);
-      return g ? guardGiftOf(g) : null;
+  function giftsByCmd(cmd, data) {
+    if (cmd.indexOf('SEND_GIFT') === 0) return giftsOf(data).map(guardGiftOf).filter(Boolean);
+    if (cmd.indexOf('SUPER_CHAT_MESSAGE') === 0) {
+      const sc = scOf(data);
+      return sc ? [sc] : [];
     }
-    if (cmd.indexOf('SUPER_CHAT_MESSAGE') === 0) return scOf(data);
-    if (cmd.indexOf('GUARD_BUY') === 0 || cmd.indexOf('USER_TOAST_MSG') === 0) return guardOf(data);
-    return null;
+    if (cmd.indexOf('GUARD_BUY') === 0 || cmd.indexOf('USER_TOAST_MSG') === 0) {
+      const guard = guardOf(data);
+      return guard ? [guard] : [];
+    }
+    return [];
   }
 
   const giftRows = [];
@@ -502,7 +527,7 @@
     return !!(t && (t.is_done === 1 || t.is_done === true));
   }
 
-  function pushGift(g) {
+  function mergeGift(g) {
     if (g.name === LIGHT_GIFT) {
       if (!feedLightSeen && !feedTaskDone()) {
         /* 首个灯牌记为点亮任务，批量投喂的其余个数仍按 +1 计入 */
@@ -522,6 +547,11 @@
     } else {
       giftRows.push({ name: g.name, num: g.num, battery: g.battery, extra: extra });
     }
+  }
+
+  /* 一条广播可含多个礼物（盲盒批量开出），合并后统一落盘与重绘 */
+  function pushGifts(list) {
+    list.forEach(mergeGift);
     saveGifts();
     rerender();
   }
@@ -536,8 +566,8 @@
     for (let i = 0; i < arr.length; i++) {
       const m = arr[i];
       if (!m || typeof m.cmd !== 'string') continue;
-      const gift = giftByCmd(m.cmd, m.data || {});
-      if (gift && me && String(gift.uid) === String(me)) pushGift(gift);
+      const mine = giftsByCmd(m.cmd, m.data || {}).filter((g) => me && String(g.uid) === String(me));
+      if (mine.length) pushGifts(mine);
     }
   }
 
