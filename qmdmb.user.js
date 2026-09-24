@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.4
+// @version      1.5.5
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1094,7 +1094,15 @@
     foot += '</div>';
     const tFeed = medal && medal.today_feed != null ? Number(medal.today_feed) : null;
     if (tFeed != null && tFeed - total > 0) {
-      foot += '<div class="g-sum dim">其他（充电/投币/分享）+' + (tFeed - total) + '</div>';
+      const otherBoosted = tFeed - total;
+      const otherBase = guard > 0 ? Math.round(otherBoosted / 1.5 * 10) / 10 : otherBoosted;
+      let other = '<div class="g-sum dim">其他（充电/投币/分享）+' + otherBase;
+      if (guard > 0) {
+        const otherRound = Math.round(otherBase * 15) / 10;
+        other += ' ×1.5 = ' + otherRound +
+          (Number.isInteger(otherRound) ? '' : '（<b>' + Math.round(otherRound) + '</b>）');
+      }
+      foot += other + '</div>';
     }
     return '<div class="gain"><div class="tt">今日亲密度增长明细</div>' + body + foot + '</div>';
   }
