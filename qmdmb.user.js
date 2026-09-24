@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.5
+// @version      1.5.6
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1087,20 +1087,24 @@
     let total = sum;
     let foot = '<div class="g-sum">明细合计 <b>+' + sum + '</b>';
     if (guard > 0) {
-      const boosted = Math.round(sum * 15) / 10;
-      total = Math.round(boosted);
-      foot += ' ×1.5 = ' + boosted + (Number.isInteger(boosted) ? '' : '（<b>' + total + '</b>）');
+      const boosted = sum * 15 / 10;
+      total = Math.floor(boosted);
+      foot += ' ×1.5 = ' + boosted;
+      const kept = Math.round((boosted - total) * 10) / 10;
+      if (kept > 0) foot += '（<b>' + total + '</b>，余 ' + kept + ' 保留）';
     }
     foot += '</div>';
     const tFeed = medal && medal.today_feed != null ? Number(medal.today_feed) : null;
     if (tFeed != null && tFeed - total > 0) {
-      const otherBoosted = tFeed - total;
-      const otherBase = guard > 0 ? Math.round(otherBoosted / 1.5 * 10) / 10 : otherBoosted;
-      let other = '<div class="g-sum dim">其他（充电/投币/分享）+' + otherBase;
+      const otherCredited = tFeed - total;
+      let other = '<div class="g-sum dim">其他（充电/投币/分享）+';
       if (guard > 0) {
-        const otherRound = Math.round(otherBase * 15) / 10;
-        other += ' ×1.5 = ' + otherRound +
-          (Number.isInteger(otherRound) ? '' : '（<b>' + Math.round(otherRound) + '</b>）');
+        const otherBase = Math.round(otherCredited / 1.5 * 10) / 10;
+        const otherShown = Math.floor(otherBase * 1.5);
+        other += otherBase + ' ×1.5 = ' + otherShown +
+          (otherShown === otherCredited ? '' : '（<b>' + otherCredited + '</b>）');
+      } else {
+        other += otherCredited;
       }
       foot += other + '</div>';
     }
