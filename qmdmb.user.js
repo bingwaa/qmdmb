@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.6
+// @version      1.5.7
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1089,9 +1089,10 @@
     if (guard > 0) {
       const boosted = sum * 15 / 10;
       total = Math.floor(boosted);
-      foot += ' ×1.5 = ' + boosted;
       const kept = Math.round((boosted - total) * 10) / 10;
-      if (kept > 0) foot += '（<b>' + total + '</b>，余 ' + kept + ' 保留）';
+      foot += ' ×1.5 = ' + (kept > 0
+        ? boosted + '（<b>' + total + '</b>，余 ' + kept + ' 保留）'
+        : '<b>' + total + '</b>');
     }
     foot += '</div>';
     const tFeed = medal && medal.today_feed != null ? Number(medal.today_feed) : null;
@@ -1101,10 +1102,11 @@
       if (guard > 0) {
         const otherBase = Math.round(otherCredited / 1.5 * 10) / 10;
         const otherShown = Math.floor(otherBase * 1.5);
-        other += otherBase + ' ×1.5 = ' + otherShown +
-          (otherShown === otherCredited ? '' : '（<b>' + otherCredited + '</b>）');
+        other += '<b>' + otherBase + '</b> ×1.5 = ' +
+          (otherShown === otherCredited ? '<b>' + otherCredited + '</b>'
+            : otherShown + '（<b>' + otherCredited + '</b>）');
       } else {
-        other += otherCredited;
+        other += '<b>' + otherCredited + '</b>';
       }
       foot += other + '</div>';
     }
