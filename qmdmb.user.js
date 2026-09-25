@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.6.5
+// @version      1.6.7
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -622,33 +622,30 @@
 
   function rpAward(a) {
     if (!a || typeof a !== 'object') return null;
-    const name = String(a.gift_name || a.award_name || a.awardName || '');
+    const name = String(a.gift_name || a.award_name || '');
     if (!name) return null;
     return { name: name, num: rpNum(a.num || a.gift_num) || 1 };
   }
 
-  /* 兼容新旧字段形态：lot_id/id、sender_name/sender_uinfo.base.name、end_time/endTime */
+  /* 字段跨版本新旧并存（lot_id/id、sender_name/sender_uinfo.base.name、end_time/endTime），两种形态都取 */
   function rpParse(d) {
     if (!d || typeof d !== 'object') return null;
-    const lotId = rpNum(d.lot_id || d.id || d.lottery_id || d.lotteryId);
+    const lotId = rpNum(d.lot_id || d.id);
     if (!lotId) return null;
-    const uinfo = d.sender_uinfo || {};
-    const base = uinfo.base || {};
-    const lot = d.lot_info || {};
+    const base = (d.sender_uinfo || {}).base || {};
     const awards = (Array.isArray(d.awards) ? d.awards : []).map(rpAward).filter(Boolean);
     return {
       lotId: lotId,
-      rpType: rpNum(d.rp_type || d.rpType || lot.rp_type),
+      rpType: rpNum(d.rp_type || d.rpType),
       sender: String(d.sender_name || base.name || ''),
       awards: awards,
-      endTime: rpNum(d.end_time || d.endTime || lot.end_time),
-      /* 含上舰券的为大航海红包，PC 端只渲染手机扫码 */
-      guard: !!(d.rp_guard_info || lot.rp_guard_info),
+      endTime: rpNum(d.end_time || d.endTime),
+      guard: !!d.rp_guard_info,
       /* 参与条件：1需关注 2需粉丝团 3需大航海，receive_type 1 需分享 */
-      need: rpNum(d.join_requirement || d.joinRequirement || lot.join_requirement),
-      needFollow: !!(d.need_follow || d.needFollow || lot.need_follow),
-      shared: rpNum(d.receive_type || d.receiveType || lot.receive_type) === 1,
-      disabled: String(d.disabled_text || d.disable_text || d.user_status_text || d.status_text || '')
+      need: rpNum(d.join_requirement || d.joinRequirement),
+      needFollow: !!(d.need_follow || d.needFollow),
+      shared: rpNum(d.receive_type || d.receiveType) === 1,
+      disabled: String(d.disabled_text || d.status_text || '')
     };
   }
 
@@ -681,7 +678,6 @@
       disabled: info.disabled,
       ended: false,
       status: done ? 'done' : 'idle',
-      text: done ? '已参与' : '',
       result: '',
       win: null,
       winLoading: false
@@ -691,7 +687,7 @@
 
   /* ---------- 红包参与条件 ---------- */
 
-  /* 关注状态以 relation 接口为准，带缓存；force 为 true 时强制刷新 */
+  /* 关注状态以 relation 接口为准，带缓存与在途去重 */
   async function rpLoadFollow(force) {
     const uid = rpRoom && rpRoom.uid;
     if (!uid) return false;
@@ -724,11 +720,18 @@
     return null;
   }
 
+  /* tip 为条件未满足时给用户的提示 */
   function rpCond(row) {
     const args = renderArgs || {};
-    if (row.need === 2) return { text: '需先加入粉丝团', met: args.medal ? true : false };
-    if (row.need === 3) return { text: '需先开通大航海', met: (args.guard || 0) > 0 };
-    if (row.need === 1 || row.needFollow) return { text: '需先关注主播', met: rpFollowed() };
+    if (row.need === 2) {
+      return { text: '需先加入粉丝团', met: !!args.medal, tip: '需先加入粉丝团，请手动加入后再抢' };
+    }
+    if (row.need === 3) {
+      return { text: '需先开通大航海', met: (args.guard || 0) > 0, tip: '需先开通大航海，无法参与' };
+    }
+    if (row.need === 1 || row.needFollow) {
+      return { text: '需先关注主播', met: rpFollowed(), tip: '需先关注主播，请手动关注后再抢' };
+    }
     if (row.shared) return { text: '需分享后参与', met: null };
     return null;
   }
@@ -736,10 +739,7 @@
   /* 条件明确未满足时不发请求，避免服务端替用户完成关注等操作 */
   function rpCondBlock(row) {
     const c = rpCond(row);
-    if (!c || c.met !== false) return null;
-    if (row.need === 2) return '需先加入粉丝团，请手动加入后再抢';
-    if (row.need === 3) return '需先开通大航海，无法参与';
-    return '需先关注主播，请手动关注后再抢';
+    return c && c.met === false ? c.tip : null;
   }
 
   function rpCondTag(c) {
@@ -778,7 +778,6 @@
     return '<div class="dim">中奖 ' + list.length + ' 人</div>' + list.map(rpWinRowHtml).join('');
   }
 
-  /* 列表最多显示 n 行，其余靠滚动 */
   function capRows(list, n) {
     if (!list) return;
     list.style.maxHeight = '';
@@ -799,7 +798,6 @@
     if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
   }
 
-  /* 贴主面板右侧 10px，与主面板顶对齐，高度随内容 */
   function syncWinBox() {
     const q = document.getElementById(RPWIN_ID);
     const p = document.getElementById(PANEL_ID);
@@ -844,14 +842,13 @@
     const ended = !!row.endTime && row.endTime <= nowSec();
     let tail;
     if (ended) {
-      /* 结束后只留名单入口，参与状态由名单体现 */
       tail = '<span class="rp-win" data-lot="' + row.lotId + '">' +
-        (row.winLoading ? '查询中' : rpWinLot === row.lotId ? '关闭名单' : '名单') + '</span>';
+        (row.winLoading ? '查询中' : '名单') + '</span>';
       if (row.status === 'fail') {
         tail += '<span class="rp-tag bad" title="' + esc(row.result) + '">失败</span>';
       }
     } else if (row.status === 'done') {
-      tail = '<span class="rp-tag ok">' + esc(row.text || '已参与') + '</span>';
+      tail = '<span class="rp-tag ok">已参与</span>';
     } else if (row.status === 'joining') {
       tail = '<span class="rp-tag wait">请求中</span>';
     } else if (row.status === 'fail') {
@@ -889,7 +886,7 @@
       const t = rpLeftText(row);
       if (list[i].textContent !== t) list[i].textContent = t;
     }
-    /* 结束时刻需要整块重绘：按钮换成已结束、出现名单入口 */
+    /* 结束时刻要整块重绘：出现名单入口 */
     let flip = false;
     rpMap.forEach((row) => {
       const e = !!row.endTime && row.endTime <= nowSec();
@@ -925,7 +922,6 @@
           const row = rpMap.get(info.lotId);
           if (row && rpNum(it.user_status) === 1 && row.status !== 'done') {
             row.status = 'done';
-            row.text = '已参与';
             rpDone.add(info.lotId);
             saveRp();
             changed = true;
@@ -1004,15 +1000,10 @@
     })).filter((w) => w.uid);
   }
 
-  /* 名单：再点一次关闭侧栏；未展开则拉取，空名单短轮询等待结算 */
+  /* 名单侧栏由面板里的 × 关闭；切换红包则改为显示该红包的名单，空名单短轮询等待结算 */
   async function rpWinners(lotId) {
     const row = rpMap.get(lotId);
     if (!row) return;
-    if (rpWinLot === lotId) {
-      closeWinPanel();
-      rerender();
-      return;
-    }
     if (row.winLoading || (row.win && row.win.list && row.win.list.length)) {
       openWinPanel(lotId);
       rerender();
@@ -1066,7 +1057,6 @@
     const code = j ? rpNum(j.code) : -1;
     if (code === 0) {
       row.status = 'done';
-      row.text = '已参与';
       row.result = '';
       rpDone.add(lotId);
       saveRp();
