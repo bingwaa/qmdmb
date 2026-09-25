@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.6.4
+// @version      1.6.5
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -65,6 +65,8 @@
   const RP_REL_MS = 60 * 1000;
   const RPWIN_ID = 'qmdmb-fanpanel-rpwin';
   const RP_WIN_TRIES = 6;
+  const RP_WIN_MAX = 30;
+  const LIVE_MAX = 20;
 
   const OP_HEARTBEAT = 2;
   const OP_AUTH = 7;
@@ -772,11 +774,22 @@
     if (!row.win) return '<div class="dim">点击「名单」查询</div>';
     if (row.win.err) return '<div class="dim">名单查询失败：' + esc(row.win.err) + '</div>';
     const list = row.win.list;
-    if (!list.length) {
-      return '<div class="dim">名单尚未生成</div>' +
-        (row.win.raw ? '<div class="wr">服务端返回：' + esc(row.win.raw) + '</div>' : '');
-    }
+    if (!list.length) return '<div class="dim">名单尚未生成</div>';
     return '<div class="dim">中奖 ' + list.length + ' 人</div>' + list.map(rpWinRowHtml).join('');
+  }
+
+  /* 列表最多显示 n 行，其余靠滚动 */
+  function capRows(list, n) {
+    if (!list) return;
+    list.style.maxHeight = '';
+    const kids = Array.prototype.filter.call(list.children, (el) => !el.classList.contains('dim'));
+    const tops = [];
+    for (let i = 0; i < kids.length; i++) {
+      const t = kids[i].offsetTop;
+      if (!tops.length || t > tops[tops.length - 1] + 1) tops.push(t);
+    }
+    if (tops.length <= n) return;
+    list.style.maxHeight = (tops[n] - tops[0]) + 'px';
   }
 
   function closeWinPanel() {
@@ -806,6 +819,7 @@
       (row ? '<span class="dim"> ' + esc(rpTypeName(row)) + '</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
       '<div class="wl">' + rpWinBody(row) + '</div>';
+    capRows(q.querySelector('.wl'), RP_WIN_MAX);
     syncWinBox();
     if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
   }
@@ -971,26 +985,17 @@
     return b;
   }
 
-  async function rpWinFetch(lotId, writeOff) {
+  async function rpWinFetch(lotId) {
     try {
-      return await fetchJson(API_RPWIN + '?lot_id=' + encodeURIComponent(lotId) +
-        '&write_off_only=' + (writeOff ? 'true' : 'false'));
+      return await fetchJson(API_RPWIN + '?lot_id=' + encodeURIComponent(lotId) + '&write_off_only=false');
     } catch (e) {
       return { code: -1, message: e.message || '网络错误' };
     }
   }
 
-  /* 名单为空时把服务端返回原样带出来，便于核对字段 */
-  function rpWinRaw(j) {
-    try {
-      return JSON.stringify(j.data).slice(0, 300);
-    } catch (e) {
-      return '';
-    }
-  }
-
   function rpWinParse(j) {
-    const raw = Array.isArray(j.data.list) ? j.data.list : [];
+    const d = j.data;
+    const raw = Array.isArray(d.winner_info) ? d.winner_info : Array.isArray(d.list) ? d.list : [];
     return raw.map((w) => ({
       uid: w.uid,
       name: String(w.name || w.uname || w.nickname || ''),
@@ -1018,21 +1023,10 @@
     openWinPanel(lotId);
     rerender();
     for (let i = 0; i < RP_WIN_TRIES; i++) {
-      const j = await rpWinFetch(lotId, false);
+      const j = await rpWinFetch(lotId);
       if (rpNum(j && j.code) === 0 && j.data) {
-        const list = rpWinParse(j);
-        if (list.length) {
-          row.win = { list: list };
-          break;
-        }
-        /* 名单为空时换 write_off_only=true 再试一次 */
-        const j2 = await rpWinFetch(lotId, true);
-        const list2 = rpNum(j2 && j2.code) === 0 && j2.data ? rpWinParse(j2) : [];
-        if (list2.length) {
-          row.win = { list: list2 };
-          break;
-        }
-        row.win = { list: [], raw: rpWinRaw(j) };
+        row.win = { list: rpWinParse(j) };
+        if (row.win.list.length) break;
       } else {
         row.win = { err: (j && (j.code + (j.message ? '：' + j.message : ''))) || '未知错误' };
         break;
@@ -1370,7 +1364,7 @@
         width:max-content;min-width:300px;}
       #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;display:grid;
         grid-template-columns:max-content max-content max-content max-content max-content;
-        column-gap:10px;row-gap:6px;align-items:center;justify-content:start;white-space:nowrap;}
+        column-gap:10px;row-gap:6px;align-items:center;align-content:start;justify-content:start;white-space:nowrap;}
       #${LIVE_PANEL_ID} .list .dim{grid-column:1 / -1;}
       #${LIVE_PANEL_ID} .lv-n{color:#fff;overflow:hidden;text-overflow:ellipsis;}
       #${LIVE_PANEL_ID} .lv-medal{display:inline-flex;align-items:center;gap:3px;
@@ -1455,13 +1449,12 @@
       #${RPWIN_ID} .x:hover{color:#fff;background:rgba(255,255,255,.14);}
       #${RPWIN_ID} .wl{flex:1 1 auto;overflow-y:auto;min-height:0;display:grid;
         grid-template-columns:max-content max-content max-content;column-gap:10px;row-gap:6px;
-        align-items:center;justify-content:start;}
+        align-items:center;align-content:start;justify-content:start;}
       #${RPWIN_ID} .wl .dim{grid-column:1 / -1;}
       #${RPWIN_ID} .wn{color:#e6e6e6;overflow:hidden;text-overflow:ellipsis;max-width:150px;}
       #${RPWIN_ID} .wn.self{color:#ffd97a;font-weight:600;}
       #${RPWIN_ID} .wp{color:#9a9a9a;}
       #${RPWIN_ID} .wc{color:#9a9a9a;justify-self:end;}
-      #${RPWIN_ID} .wr{grid-column:1 / -1;color:#7a7a7a;font-size:11px;word-break:break-all;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
     `;
     document.head.appendChild(st);
@@ -1869,7 +1862,7 @@
     toggleLiveBtn();
   }
 
-  /* 副面板贴主面板右侧 10px（名单面板已开时贴其右侧），高度与主面板一致 */
+  /* 副面板贴主面板右侧 10px（名单面板已开时贴其右侧），与主面板顶对齐，高度随内容 */
   function syncLiveBox() {
     const q = document.getElementById(LIVE_PANEL_ID);
     const p = document.getElementById(PANEL_ID);
@@ -1880,8 +1873,12 @@
     if (w) right = Math.max(right, w.getBoundingClientRect().right);
     const left = Math.round(right + 10);
     q.style.left = left + 'px';
-    q.style.height = Math.round(r.height) + 'px';
+    q.style.top = Math.round(r.top) + 'px';
+    q.style.bottom = 'auto';
+    q.style.height = 'auto';
+    q.style.maxHeight = Math.max(160, Math.round(window.innerHeight - r.top - 10)) + 'px';
     q.style.maxWidth = Math.max(300, window.innerWidth - left - 16) + 'px';
+    capRows(q.querySelector('.list'), LIVE_MAX);
   }
 
   function closeLivePanel() {
