@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.0
+// @version      1.7.1
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -765,7 +765,7 @@
     const self = me && String(w.uid) === String(me);
     return '<span class="wn' + (self ? ' self' : '') + '">' + esc(w.name || ('uid ' + w.uid)) + '</span>' +
       '<span class="wp">' + esc(w.award || '') + '</span>' +
-      '<span class="wc">' + (w.num > 1 ? '×' + w.num : '') + '</span>';
+      '<span class="wc">' + (w.num > 1 || String(w.award || '').indexOf('电池') >= 0 ? '×' + w.num : '') + '</span>';
   }
 
   function rpWinBody(row) {
@@ -989,15 +989,28 @@
     }
   }
 
+  /* 电池类奖品不是真实礼物（gift_id/gift_num 恒为 0），数量在 award_price，单位为金瓜子 */
+  function rpWinAward(w) {
+    const name = String(w.award_name || w.awardName || '');
+    if (name.indexOf('电池') >= 0) {
+      const gold = rpNum(w.award_price || w.awardPrice) || rpNum(w.gift_num || w.giftNum);
+      return { award: name, num: Math.round(gold / GOLD_PER_BATTERY) || 1 };
+    }
+    return { award: name, num: rpNum(w.gift_num || w.giftNum) || 1 };
+  }
+
   function rpWinParse(j) {
     const d = j.data;
     const raw = Array.isArray(d.winner_info) ? d.winner_info : Array.isArray(d.list) ? d.list : [];
-    return raw.map((w) => ({
-      uid: w.uid,
-      name: String(w.name || w.uname || w.nickname || ''),
-      award: String(w.award_name || w.awardName || ''),
-      num: rpNum(w.gift_num || w.giftNum) || 1
-    })).filter((w) => w.uid);
+    return raw.map((w) => {
+      const a = rpWinAward(w);
+      return {
+        uid: w.uid,
+        name: String(w.name || w.uname || w.nickname || ''),
+        award: a.award,
+        num: a.num
+      };
+    }).filter((w) => w.uid);
   }
 
   /* 名单侧栏由面板里的 × 关闭；切换红包则改为显示该红包的名单，空名单短轮询等待结算 */
