@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.6.0
+// @version      1.6.1
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -43,6 +43,7 @@
   const API_COINEXP = 'https://api.bilibili.com/x/web-interface/coin/today/exp';
   const API_RPDRAW = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDraw';
   const API_RPLOTTERY = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/lottery/getLotteryInfoWeb';
+  const API_RPWIN = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketGetWinners';
   const API_GUARDACTIVE = 'https://api.live.bilibili.com/xlive/general-interface/v1/guard/GuardActive';
   const API_NAV = 'https://api.bilibili.com/x/web-interface/nav';
   const COIN_EXP_PER_COIN = 10;
@@ -632,7 +633,12 @@
       awards: awards,
       endTime: rpNum(d.end_time || d.endTime || lot.end_time),
       /* 含上舰券的为大航海红包，PC 端只渲染手机扫码 */
-      guard: !!(d.rp_guard_info || lot.rp_guard_info)
+      guard: !!(d.rp_guard_info || lot.rp_guard_info),
+      /* 参与条件：1需关注 2需粉丝团 3需大航海，receive_type 1 需分享 */
+      need: rpNum(d.join_requirement || d.joinRequirement || lot.join_requirement),
+      needFollow: !!(d.need_follow || d.needFollow || lot.need_follow),
+      shared: rpNum(d.receive_type || d.receiveType || lot.receive_type) === 1,
+      disabled: String(d.disabled_text || d.disable_text || d.user_status_text || d.status_text || '')
     };
   }
 
@@ -645,6 +651,10 @@
       if (info.sender) old.sender = info.sender;
       if (info.rpType) old.rpType = info.rpType;
       if (info.guard) old.guard = true;
+      if (info.need) old.need = info.need;
+      if (info.needFollow) old.needFollow = true;
+      if (info.shared) old.shared = true;
+      if (info.disabled) old.disabled = info.disabled;
       return false;
     }
     const done = rpDone.has(info.lotId);
@@ -655,11 +665,41 @@
       sender: info.sender,
       awards: info.awards,
       endTime: info.endTime,
+      need: info.need,
+      needFollow: !!info.needFollow,
+      shared: !!info.shared,
+      disabled: info.disabled,
+      ended: false,
       status: done ? 'done' : 'idle',
       text: done ? '已参与' : '',
-      result: ''
+      result: '',
+      win: null,
+      winLoading: false
     });
     return true;
+  }
+
+  /* ---------- 红包参与条件 ---------- */
+
+  /* 关注按钮由页面渲染，两者都不存在时状态未知 */
+  function rpFollowed() {
+    if (pick(FOLLOW_SEL)) return true;
+    if (pick(ENTRY_SEL)) return false;
+    return null;
+  }
+
+  function rpCond(row) {
+    const args = renderArgs || {};
+    if (row.need === 2) return { text: '需先加入粉丝团', met: args.medal ? true : false };
+    if (row.need === 3) return { text: '需先开通大航海', met: (args.guard || 0) > 0 };
+    if (row.need === 1 || row.needFollow) return { text: '需先关注主播', met: rpFollowed() };
+    if (row.shared) return { text: '需分享后参与', met: null };
+    return null;
+  }
+
+  function rpCondTag(c) {
+    if (!c) return '';
+    return '<span class="rp-cond' + (c.met === false ? ' rp-cond-warn' : '') + '">' + esc(c.text) + '</span>';
   }
 
   function rpLeftText(row) {
@@ -673,9 +713,25 @@
     return list.map((a) => a.name + '×' + a.num).join('、');
   }
 
+  function rpWinHtml(row) {
+    if (!row.win) return '';
+    if (row.win.err) return '<div class="rp-win-list dim">名单查询失败：' + esc(row.win.err) + '</div>';
+    const list = row.win.list;
+    if (!list.length) return '<div class="rp-win-list dim">暂无中奖记录</div>';
+    const me = myUid();
+    const names = list.slice(0, 8).map((w) => {
+      const self = me && String(w.uid) === String(me);
+      return '<span class="rp-win-name' + (self ? ' rp-win-self' : '') + '">' +
+        esc(w.name || ('uid ' + w.uid)) + (w.num > 1 ? '×' + w.num : '') + '</span>';
+    }).join('、');
+    return '<div class="rp-win-list">中奖 ' + list.length + ' 人：' + names +
+      (list.length > 8 ? ' 等' : '') + '</div>';
+  }
+
   function rpRowHtml(row) {
     const title = rpTypeName(row) + (row.sender ? ' · ' + row.sender : '');
     const awards = rpAwardText(row.awards);
+    const ended = !!row.endTime && row.endTime <= nowSec();
     let tail;
     if (row.status === 'done') {
       tail = '<span class="rp-tag ok">' + esc(row.text || '已参与') + '</span>';
@@ -684,13 +740,26 @@
     } else if (row.status === 'fail') {
       tail = '<span class="rp-tag bad" title="' + esc(row.result) + '">失败</span>' +
         '<span class="rp-go" data-lot="' + row.lotId + '">重试</span>';
+    } else if (ended) {
+      tail = '<span class="rp-tag">已结束</span>';
     } else {
       tail = '<span class="rp-go" data-lot="' + row.lotId + '">抢</span>';
     }
-    return '<div class="rp-row"><div class="rp-meta"><span class="rp-title">' + esc(title) + '</span>' +
+    if (ended) {
+      tail = '<span class="rp-win" data-lot="' + row.lotId + '">' +
+        (row.winLoading ? '查询中' : row.win ? '收起名单' : '名单') + '</span>' + tail;
+    }
+    const c = row.status === 'done' ? null : rpCond(row);
+    /* 服务端的禁用文案只在条件确实未满足或已失败时展示，避免已满足时误报 */
+    const note = row.disabled && (!c || c.met === false || row.status === 'fail') ? row.disabled : '';
+    return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
+      '<span class="rp-title">' + esc(title) + '</span>' +
       (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
+      (note ? '<span class="rp-err">' + esc(note) + '</span>' : '') +
       (row.status === 'fail' && row.result ? '<span class="rp-err">' + esc(row.result) + '</span>' : '') +
-      '</div><span class="rp-left" data-lot="' + row.lotId + '">' + rpLeftText(row) + '</span>' + tail + '</div>';
+      '</div>' + rpCondTag(c) +
+      '<span class="rp-left" data-lot="' + row.lotId + '">' + rpLeftText(row) + '</span>' + tail +
+      '</div>' + rpWinHtml(row) + '</div>';
   }
 
   function rpHtml() {
@@ -709,6 +778,16 @@
       const t = rpLeftText(row);
       if (list[i].textContent !== t) list[i].textContent = t;
     }
+    /* 结束时刻需要整块重绘：按钮换成已结束、出现名单入口 */
+    let flip = false;
+    rpMap.forEach((row) => {
+      const e = !!row.endTime && row.endTime <= nowSec();
+      if (e !== row.ended) {
+        row.ended = e;
+        flip = true;
+      }
+    });
+    if (flip) rerender();
   }
 
   /* 已结束且未参与的红包保留一段时间后清理，避免面板无限增长 */
@@ -795,6 +874,39 @@
     return b;
   }
 
+  /* 中奖名单：已展开则收起，否则拉取 */
+  async function rpWinners(lotId) {
+    const row = rpMap.get(lotId);
+    if (!row || row.winLoading) return;
+    if (row.win) {
+      row.win = null;
+      rerender();
+      return;
+    }
+    row.winLoading = true;
+    rerender();
+    let j = null;
+    try {
+      j = await fetchJson(API_RPWIN + '?lot_id=' + encodeURIComponent(lotId) + '&write_off_only=false');
+    } catch (e) {
+      j = { code: -1, message: e.message || '网络错误' };
+    }
+    row.winLoading = false;
+    if (j && rpNum(j.code) === 0 && j.data) {
+      const raw = Array.isArray(j.data.list) ? j.data.list : [];
+      row.win = {
+        list: raw.map((w) => ({
+          uid: w.uid,
+          name: String(w.name || w.uname || w.nickname || ''),
+          num: rpNum(w.gift_num || w.num) || 1
+        })).filter((w) => w.uid)
+      };
+    } else {
+      row.win = { err: (j && (j.code + (j.message ? '：' + j.message : ''))) || '未知错误' };
+    }
+    rerender();
+  }
+
   async function rpJoin(lotId) {
     const row = rpMap.get(lotId);
     if (!row || row.status === 'joining' || row.status === 'done') return;
@@ -819,7 +931,9 @@
       toast('红包参与成功', true);
     } else {
       row.status = 'fail';
-      row.result = code + (j && j.message ? '：' + j.message : '');
+      const cond = rpCond(row);
+      row.result = (cond && cond.met === false ? cond.text + '；' : '') +
+        code + (j && j.message ? '：' + j.message : '');
       toast('红包参与失败：' + row.result, false);
     }
     rerender();
@@ -1166,7 +1280,8 @@
       ${P('.g-sum b')}{color:#ffd97a;font-size:14px;}
       ${P('.rp')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
       ${P('.rp .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      ${P('.rp-row')}{display:flex;align-items:center;gap:8px;margin:5px 0;}
+      ${P('.rp-item')}{margin:5px 0;}
+      ${P('.rp-row')}{display:flex;align-items:center;gap:8px;}
       ${P('.rp-meta')}{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
       ${P('.rp-title')}{color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-award')}{color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -1179,6 +1294,14 @@
       ${P('.rp-tag.ok')}{color:#9adc9a;border:1px solid #9adc9a;}
       ${P('.rp-tag.wait')}{color:#f0a13c;border:1px solid #f0a13c;}
       ${P('.rp-tag.bad')}{color:#ff4d4f;border:1px solid #ff4d4f;}
+      ${P('.rp-cond')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;border:1px dashed rgba(255,255,255,.28);
+        border-radius:4px;padding:0 5px;}
+      ${P('.rp-cond-warn')}{color:#f0a13c;border-color:#f0a13c;}
+      ${P('.rp-win')}{flex:0 0 auto;font-size:12px;color:#7bd88f;cursor:pointer;}
+      ${P('.rp-win:hover')}{text-decoration:underline;}
+      ${P('.rp-win-list')}{margin:2px 0 0 0;font-size:12px;color:#9a9a9a;line-height:1.5;}
+      ${P('.rp-win-name')}{color:#e6e6e6;}
+      ${P('.rp-win-self')}{color:#ffd97a;font-weight:600;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
     `;
     document.head.appendChild(st);
@@ -1424,6 +1547,8 @@
           toggleLivePanel();
         } else if (t.classList.contains('rp-go')) {
           rpJoin(Number(t.getAttribute('data-lot')));
+        } else if (t.classList.contains('rp-win')) {
+          rpWinners(Number(t.getAttribute('data-lot')));
         }
       });
       document.documentElement.appendChild(p);
