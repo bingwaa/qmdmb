@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.1
+// @version      1.7.2
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -640,6 +640,8 @@
       sender: String(d.sender_name || base.name || ''),
       awards: awards,
       endTime: rpNum(d.end_time || d.endTime),
+      /* 红包池总额，单位为金瓜子；电池红包用它换算池内电池总数 */
+      total: rpNum(d.total_price || d.totalPrice),
       guard: !!d.rp_guard_info,
       /* 参与条件：1需关注 2需粉丝团 3需大航海，receive_type 1 需分享 */
       need: rpNum(d.join_requirement || d.joinRequirement),
@@ -649,12 +651,16 @@
     };
   }
 
+  /* 返回值：0 无变化、1 新增、2 已有红包的奖品信息更新 */
   function rpAdd(info) {
-    if (!info) return false;
+    if (!info) return 0;
     const old = rpMap.get(info.lotId);
     if (old) {
+      const upd = (info.awards.length && rpAwardKey(info.awards) !== rpAwardKey(old.awards)) ||
+        (info.total && info.total !== old.total);
       if (info.endTime) old.endTime = info.endTime;
       if (info.awards.length) old.awards = info.awards;
+      if (info.total) old.total = info.total;
       if (info.sender) old.sender = info.sender;
       if (info.rpType) old.rpType = info.rpType;
       if (info.guard) old.guard = true;
@@ -662,7 +668,7 @@
       if (info.needFollow) old.needFollow = true;
       if (info.shared) old.shared = true;
       if (info.disabled) old.disabled = info.disabled;
-      return false;
+      return upd ? 2 : 0;
     }
     const done = rpDone.has(info.lotId);
     rpMap.set(info.lotId, {
@@ -672,6 +678,7 @@
       sender: info.sender,
       awards: info.awards,
       endTime: info.endTime,
+      total: info.total,
       need: info.need,
       needFollow: !!info.needFollow,
       shared: !!info.shared,
@@ -682,7 +689,7 @@
       win: null,
       winLoading: false
     });
-    return true;
+    return 1;
   }
 
   /* ---------- 红包参与条件 ---------- */
@@ -754,8 +761,17 @@
     return Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
   }
 
-  function rpAwardText(list) {
+  function rpAwardKey(list) {
     return list.map((a) => a.name + '×' + a.num).join('、');
+  }
+
+  /* 电池类奖品的名字是「电池红包」、num 是份数，池内电池总数由 total（金瓜子）换算 */
+  function rpAwardText(list, total) {
+    const battery = total ? Math.round(total / GOLD_PER_BATTERY) : 0;
+    return list.map((a) => {
+      if (a.name.indexOf('电池') < 0) return a.name + '×' + a.num;
+      return '电池' + (battery ? ' ×' + battery : '') + '  共' + a.num + '份';
+    }).join('、');
   }
 
   /* ---------- 中奖名单侧栏 ---------- */
@@ -838,7 +854,7 @@
 
   function rpRowHtml(row) {
     const title = rpTypeName(row) + (row.sender ? ' · ' + row.sender : '');
-    const awards = rpAwardText(row.awards);
+    const awards = rpAwardText(row.awards, row.total);
     const ended = !!row.endTime && row.endTime <= nowSec();
     let tail;
     if (ended) {
@@ -1097,8 +1113,9 @@
       if (mine.length) pushGifts(mine);
       if (RP_CMDS[m.cmd]) {
         const rp = rpParse(m.data || {});
-        if (rp && rpAdd(rp)) {
-          toast('检测到' + rpTypeName(rp) + '，可在面板参与', true);
+        const st = rpAdd(rp);
+        if (st) {
+          if (st === 1) toast('检测到' + rpTypeName(rp) + '，可在面板参与', true);
           rerender();
         }
       }
