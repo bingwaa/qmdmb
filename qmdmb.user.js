@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.5.8
+// @version      1.6.0
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -41,6 +41,8 @@
   const API_ONLINERANK = 'https://api.live.bilibili.com/xlive/general-interface/v1/rank/getOnlineGoldRank';
   const API_ACTIVATED = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo';
   const API_COINEXP = 'https://api.bilibili.com/x/web-interface/coin/today/exp';
+  const API_RPDRAW = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDraw';
+  const API_RPLOTTERY = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/lottery/getLotteryInfoWeb';
   const API_GUARDACTIVE = 'https://api.live.bilibili.com/xlive/general-interface/v1/guard/GuardActive';
   const API_NAV = 'https://api.bilibili.com/x/web-interface/nav';
   const COIN_EXP_PER_COIN = 10;
@@ -54,6 +56,10 @@
   const JOURNEY_EXTRA = 150;
   const GIFT_STORE = 'qmdmb-gifts-';
   const GIFT_REV = 'v2';
+  const RP_STORE = 'qmdmb-rp-';
+  const RP_SPM = '444.8.red_envelope.extract';
+  const RP_POLL_MS = 5000;
+  const RP_KEEP_MS = 10 * 60 * 1000;
 
   const OP_HEARTBEAT = 2;
   const OP_AUTH = 7;
@@ -556,6 +562,269 @@
     rerender();
   }
 
+  /* ---------- 直播间红包 ---------- */
+
+  /* 红包开始的弹幕命令，新旧版本并存 */
+  const RP_CMDS = {
+    POPULARITY_RED_POCKET_V2_START: 1,
+    POPULARITY_RED_POCKET_START: 1,
+    POPULARITY_RED_POCKET_V2_NEW: 1,
+    POPULARITY_RED_POCKET_NEW: 1,
+    RED_POCKET_START: 1
+  };
+  const RPTYPE = { 1: '人气红包', 3: '电池红包', 4: '亲密红包', 5: '电池红包' };
+
+  const rpMap = new Map();
+  let rpDone = new Set();
+  let rpRoom = null;
+  let rpPollTimer = null;
+  let rpPolling = false;
+
+  function nowSec() {
+    return Math.floor(Date.now() / 1000);
+  }
+
+  function rpNum(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function rpTypeName(row) {
+    if (row.guard) return '大航海红包';
+    return RPTYPE[rpNum(row.rpType)] || '红包';
+  }
+
+  function rpStoreKey() {
+    return RP_STORE + dayStamp();
+  }
+
+  function loadRp() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(rpStoreKey()) || 'null');
+      if (Array.isArray(arr)) rpDone = new Set(arr.map(Number).filter(Boolean));
+    } catch (e) {}
+  }
+
+  function saveRp() {
+    try { localStorage.setItem(rpStoreKey(), JSON.stringify(Array.from(rpDone))); } catch (e) {}
+  }
+
+  function rpAward(a) {
+    if (!a || typeof a !== 'object') return null;
+    const name = String(a.gift_name || a.award_name || a.awardName || '');
+    if (!name) return null;
+    return { name: name, num: rpNum(a.num || a.gift_num) || 1 };
+  }
+
+  /* 兼容新旧字段形态：lot_id/id、sender_name/sender_uinfo.base.name、end_time/endTime */
+  function rpParse(d) {
+    if (!d || typeof d !== 'object') return null;
+    const lotId = rpNum(d.lot_id || d.id || d.lottery_id || d.lotteryId);
+    if (!lotId) return null;
+    const uinfo = d.sender_uinfo || {};
+    const base = uinfo.base || {};
+    const lot = d.lot_info || {};
+    const awards = (Array.isArray(d.awards) ? d.awards : []).map(rpAward).filter(Boolean);
+    return {
+      lotId: lotId,
+      rpType: rpNum(d.rp_type || d.rpType || lot.rp_type),
+      sender: String(d.sender_name || base.name || ''),
+      awards: awards,
+      endTime: rpNum(d.end_time || d.endTime || lot.end_time),
+      /* 含上舰券的为大航海红包，PC 端只渲染手机扫码 */
+      guard: !!(d.rp_guard_info || lot.rp_guard_info)
+    };
+  }
+
+  function rpAdd(info) {
+    if (!info) return false;
+    const old = rpMap.get(info.lotId);
+    if (old) {
+      if (info.endTime) old.endTime = info.endTime;
+      if (info.awards.length) old.awards = info.awards;
+      if (info.sender) old.sender = info.sender;
+      if (info.rpType) old.rpType = info.rpType;
+      if (info.guard) old.guard = true;
+      return false;
+    }
+    const done = rpDone.has(info.lotId);
+    rpMap.set(info.lotId, {
+      lotId: info.lotId,
+      rpType: info.rpType,
+      guard: !!info.guard,
+      sender: info.sender,
+      awards: info.awards,
+      endTime: info.endTime,
+      status: done ? 'done' : 'idle',
+      text: done ? '已参与' : '',
+      result: ''
+    });
+    return true;
+  }
+
+  function rpLeftText(row) {
+    if (!row.endTime) return '';
+    const left = row.endTime - nowSec();
+    if (left <= 0) return '已结束';
+    return Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+  }
+
+  function rpAwardText(list) {
+    return list.map((a) => a.name + '×' + a.num).join('、');
+  }
+
+  function rpRowHtml(row) {
+    const title = rpTypeName(row) + (row.sender ? ' · ' + row.sender : '');
+    const awards = rpAwardText(row.awards);
+    let tail;
+    if (row.status === 'done') {
+      tail = '<span class="rp-tag ok">' + esc(row.text || '已参与') + '</span>';
+    } else if (row.status === 'joining') {
+      tail = '<span class="rp-tag wait">请求中</span>';
+    } else if (row.status === 'fail') {
+      tail = '<span class="rp-tag bad" title="' + esc(row.result) + '">失败</span>' +
+        '<span class="rp-go" data-lot="' + row.lotId + '">重试</span>';
+    } else {
+      tail = '<span class="rp-go" data-lot="' + row.lotId + '">抢</span>';
+    }
+    return '<div class="rp-row"><div class="rp-meta"><span class="rp-title">' + esc(title) + '</span>' +
+      (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
+      (row.status === 'fail' && row.result ? '<span class="rp-err">' + esc(row.result) + '</span>' : '') +
+      '</div><span class="rp-left" data-lot="' + row.lotId + '">' + rpLeftText(row) + '</span>' + tail + '</div>';
+  }
+
+  function rpHtml() {
+    const rows = Array.from(rpMap.values()).sort((a, b) => a.endTime - b.endTime);
+    const body = rows.length ? rows.map(rpRowHtml).join('') : '<div class="dim">未检测到红包</div>';
+    return '<div class="rp"><div class="tt">红包</div>' + body + '</div>';
+  }
+
+  function paintRedPackets() {
+    const p = document.getElementById(PANEL_ID);
+    if (!p) return;
+    const list = p.querySelectorAll('.rp-left');
+    for (let i = 0; i < list.length; i++) {
+      const row = rpMap.get(Number(list[i].getAttribute('data-lot')));
+      if (!row) continue;
+      const t = rpLeftText(row);
+      if (list[i].textContent !== t) list[i].textContent = t;
+    }
+  }
+
+  /* 已结束且未参与的红包保留一段时间后清理，避免面板无限增长 */
+  function pruneRp() {
+    const now = Date.now();
+    rpMap.forEach((row, lotId) => {
+      if (row.status === 'done' || !row.endTime) return;
+      if (now - row.endTime * 1000 > RP_KEEP_MS) rpMap.delete(lotId);
+    });
+  }
+
+  async function rpPoll() {
+    if (rpPolling || !rpRoom || !rpRoom.roomId) return;
+    rpPolling = true;
+    let changed = false;
+    try {
+      const j = await fetchJson(API_RPLOTTERY + '?roomid=' + encodeURIComponent(rpRoom.roomId));
+      const arr = j && j.code === 0 && j.data ? j.data.popularity_red_pocket : null;
+      if (Array.isArray(arr)) {
+        arr.forEach((it) => {
+          const info = rpParse(it);
+          if (!info) return;
+          if (rpAdd(info)) changed = true;
+          const row = rpMap.get(info.lotId);
+          if (row && rpNum(it.user_status) === 1 && row.status !== 'done') {
+            row.status = 'done';
+            row.text = '已参与';
+            rpDone.add(info.lotId);
+            saveRp();
+            changed = true;
+          }
+        });
+      }
+    } catch (e) {}
+    pruneRp();
+    rpPolling = false;
+    if (changed) rerender();
+  }
+
+  function startRpPoll() {
+    stopRpPoll();
+    rpPoll();
+    rpPollTimer = setInterval(rpPoll, RP_POLL_MS);
+  }
+
+  function stopRpPoll() {
+    clearInterval(rpPollTimer);
+    rpPollTimer = null;
+  }
+
+  async function rpPost(data) {
+    const body = Object.keys(data)
+      .map((k) => encodeURIComponent(k) + '=' + encodeURIComponent(data[k]))
+      .join('&');
+    try {
+      const r = await fetch(API_RPDRAW, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body
+      });
+      if (!r.ok) return { code: -r.status, message: 'HTTP ' + r.status };
+      return r.json();
+    } catch (e) {
+      return { code: -1, message: e.message || '网络错误' };
+    }
+  }
+
+  /* 先按 H5 形态请求，失败后按 PC 形态（不含 uid 与 statistics）重试一次 */
+  function rpBody(lotId, full) {
+    const b = {
+      room_id: rpRoom.roomId,
+      ruid: rpRoom.uid,
+      lot_id: lotId,
+      spm_id: RP_SPM,
+      jump_from: '',
+      session_id: '',
+      csrf: cookie('bili_jct')
+    };
+    if (full) {
+      b.uid = myUid() || '';
+      b.statistics = JSON.stringify({ appId: 100, platform: 3, version: '', abtest: '' });
+    }
+    return b;
+  }
+
+  async function rpJoin(lotId) {
+    const row = rpMap.get(lotId);
+    if (!row || row.status === 'joining' || row.status === 'done') return;
+    if (!rpRoom || !rpRoom.roomId || !rpRoom.uid) {
+      toast('缺少房间或主播信息，无法参与', false);
+      return;
+    }
+    row.status = 'joining';
+    rerender();
+    let j = await rpPost(rpBody(lotId, true));
+    if (!j || rpNum(j.code) !== 0) {
+      const j2 = await rpPost(rpBody(lotId, false));
+      if (j2 && (rpNum(j2.code) === 0 || !j.message)) j = j2;
+    }
+    const code = j ? rpNum(j.code) : -1;
+    if (code === 0) {
+      row.status = 'done';
+      row.text = '已参与';
+      row.result = '';
+      rpDone.add(lotId);
+      saveRp();
+      toast('红包参与成功', true);
+    } else {
+      row.status = 'fail';
+      row.result = code + (j && j.message ? '：' + j.message : '');
+      toast('红包参与失败：' + row.result, false);
+    }
+    rerender();
+  }
+
   /* ---------- WebSocket 抓包 ---------- */
 
   function onMessages(text) {
@@ -568,6 +837,13 @@
       if (!m || typeof m.cmd !== 'string') continue;
       const mine = giftsByCmd(m.cmd, m.data || {}).filter((g) => me && String(g.uid) === String(me));
       if (mine.length) pushGifts(mine);
+      if (RP_CMDS[m.cmd]) {
+        const rp = rpParse(m.data || {});
+        if (rp && rpAdd(rp)) {
+          toast('检测到' + rpTypeName(rp) + '，可在面板参与', true);
+          rerender();
+        }
+      }
     }
   }
 
@@ -888,6 +1164,21 @@
       ${P('.gplus')}{flex:0 0 auto;color:#7bd88f;font-weight:600;}
       ${P('.g-sum')}{margin-top:7px;font-size:12px;color:#9a9a9a;}
       ${P('.g-sum b')}{color:#ffd97a;font-size:14px;}
+      ${P('.rp')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
+      ${P('.rp .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.rp-row')}{display:flex;align-items:center;gap:8px;margin:5px 0;}
+      ${P('.rp-meta')}{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
+      ${P('.rp-title')}{color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.rp-award')}{color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.rp-err')}{color:#ff4d4f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.rp-left')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;min-width:34px;text-align:right;}
+      ${P('.rp-go')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
+        border-radius:4px;padding:1px 8px;cursor:pointer;}
+      ${P('.rp-go:hover')}{background:#fb7299;color:#fff;}
+      ${P('.rp-tag')}{flex:0 0 auto;font-size:12px;border-radius:4px;padding:1px 6px;}
+      ${P('.rp-tag.ok')}{color:#9adc9a;border:1px solid #9adc9a;}
+      ${P('.rp-tag.wait')}{color:#f0a13c;border:1px solid #f0a13c;}
+      ${P('.rp-tag.bad')}{color:#ff4d4f;border:1px solid #ff4d4f;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
     `;
     document.head.appendChild(st);
@@ -997,9 +1288,11 @@
     if (w && sec != null) w.textContent = watchText(sec);
     if (b && barCount != null) b.textContent = barText(barCount);
     if (t) t.textContent = beatText();
+    paintRedPackets();
   }
 
   function stopCounters() {
+    stopRpPoll();
     clearInterval(countTimer);
     countTimer = null;
     watchServerSec = null;
@@ -1129,6 +1422,8 @@
           p.remove();
         } else if (t.classList.contains('lb')) {
           toggleLivePanel();
+        } else if (t.classList.contains('rp-go')) {
+          rpJoin(Number(t.getAttribute('data-lot')));
         }
       });
       document.documentElement.appendChild(p);
@@ -1143,7 +1438,8 @@
         '<div class="hd">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
         ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
         '<div class="dim">你尚未加入该主播的粉丝团。</div>' +
-        (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '');
+        (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '') +
+        rpHtml();
       toggleLiveBtn();
       syncLiveBox();
       return;
@@ -1187,6 +1483,7 @@
       beatHtml() +
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
+      rpHtml() +
       tasksSection;
     toggleLiveBtn();
     syncLiveBox();
@@ -1461,7 +1758,9 @@
       const medal = await getMyMedal(room.uid);
       const t = await fetchTasks(room.uid);
       const [coins, guardActive] = await Promise.all([fetchCoins(), fetchGuardActive(room.uid)]);
+      rpRoom = { roomId: room.roomId, uid: room.uid };
       startCounters(guardActive, room.uid);
+      startRpPoll();
       renderPanel({
         room: { liveStatus: meta.liveStatus, uname: meta.uname },
         medal: medal,
@@ -1626,6 +1925,7 @@
 
   installWsHook();
   loadGifts();
+  loadRp();
   loadUid();
   document.addEventListener('visibilitychange', onVisibilityChange);
 
