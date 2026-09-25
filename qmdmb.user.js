@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.6.2
+// @version      1.6.3
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -63,6 +63,8 @@
   const RP_POLL_MS = 5000;
   const RP_KEEP_MS = 10 * 60 * 1000;
   const RP_REL_MS = 60 * 1000;
+  const RPWIN_ID = 'qmdmb-fanpanel-rpwin';
+  const RP_WIN_TRIES = 6;
 
   const OP_HEARTBEAT = 2;
   const OP_AUTH = 7;
@@ -585,6 +587,7 @@
   let rpFollow = null;
   let rpFollowAt = 0;
   let rpFollowLoad = null;
+  let rpWinLot = 0;
 
   function nowSec() {
     return Math.floor(Date.now() / 1000);
@@ -753,19 +756,68 @@
     return list.map((a) => a.name + '×' + a.num).join('、');
   }
 
-  function rpWinHtml(row) {
-    if (!row.win) return '';
-    if (row.win.err) return '<div class="rp-win-list dim">名单查询失败：' + esc(row.win.err) + '</div>';
-    const list = row.win.list;
-    if (!list.length) return '<div class="rp-win-list dim">暂无中奖记录</div>';
+  /* ---------- 中奖名单侧栏 ---------- */
+
+  function rpWinRowHtml(w) {
     const me = myUid();
-    const names = list.slice(0, 8).map((w) => {
-      const self = me && String(w.uid) === String(me);
-      return '<span class="rp-win-name' + (self ? ' rp-win-self' : '') + '">' +
-        esc(w.name || ('uid ' + w.uid)) + (w.num > 1 ? '×' + w.num : '') + '</span>';
-    }).join('、');
-    return '<div class="rp-win-list">中奖 ' + list.length + ' 人：' + names +
-      (list.length > 8 ? ' 等' : '') + '</div>';
+    const self = me && String(w.uid) === String(me);
+    return '<span class="wn' + (self ? ' self' : '') + '">' + esc(w.name || ('uid ' + w.uid)) + '</span>' +
+      '<span class="wp">' + esc(w.award || '') + '</span>' +
+      '<span class="wc">' + (w.num > 1 ? '×' + w.num : '') + '</span>';
+  }
+
+  function rpWinBody(row) {
+    if (!row) return '<div class="dim">红包不存在</div>';
+    if (row.winLoading) return '<div class="dim">名单生成中…</div>';
+    if (!row.win) return '<div class="dim">点击「名单」查询</div>';
+    if (row.win.err) return '<div class="dim">名单查询失败：' + esc(row.win.err) + '</div>';
+    const list = row.win.list;
+    if (!list.length) return '<div class="dim">名单尚未生成</div>';
+    return '<div class="dim">中奖 ' + list.length + ' 人</div>' + list.map(rpWinRowHtml).join('');
+  }
+
+  function closeWinPanel() {
+    rpWinLot = 0;
+    const q = document.getElementById(RPWIN_ID);
+    if (q) q.remove();
+  }
+
+  /* 贴在最右侧已打开的面板右边 10px，高度与主面板一致 */
+  function syncWinBox() {
+    const q = document.getElementById(RPWIN_ID);
+    const p = document.getElementById(PANEL_ID);
+    if (!q || !p) return;
+    let right = p.getBoundingClientRect().right;
+    const l = document.getElementById(LIVE_PANEL_ID);
+    if (l) right = Math.max(right, l.getBoundingClientRect().right);
+    const r = p.getBoundingClientRect();
+    q.style.left = Math.round(right + 10) + 'px';
+    q.style.height = Math.round(r.height) + 'px';
+  }
+
+  function paintWinPanel() {
+    const q = document.getElementById(RPWIN_ID);
+    if (!q) return;
+    const row = rpMap.get(rpWinLot);
+    q.innerHTML = '<div class="hd">中奖名单' +
+      (row ? '<span class="dim"> ' + esc(rpTypeName(row)) + '</span>' : '') +
+      '<span class="x" title="关闭">×</span></div>' +
+      '<div class="wl">' + rpWinBody(row) + '</div>';
+    syncWinBox();
+  }
+
+  function openWinPanel(lotId) {
+    rpWinLot = lotId;
+    let q = document.getElementById(RPWIN_ID);
+    if (!q) {
+      q = document.createElement('div');
+      q.id = RPWIN_ID;
+      q.addEventListener('click', (e) => {
+        if (e.target && e.target.classList && e.target.classList.contains('x')) closeWinPanel();
+      });
+      document.documentElement.appendChild(q);
+    }
+    paintWinPanel();
   }
 
   function rpRowHtml(row) {
@@ -775,9 +827,10 @@
     let tail;
     if (ended) {
       /* 结束后只留名单入口，参与状态由名单体现 */
-      tail = '<span class="rp-win" data-lot="' + row.lotId + '">' +
-        (row.winLoading ? '查询中' : row.win ? '收起名单' : '名单') + '</span>' +
-        '<span class="rp-tag">已结束</span>';
+      tail = '<span class="rp-win' + (rpWinLot === row.lotId ? ' on' : '') +
+        '" data-lot="' + row.lotId + '">' +
+        (row.winLoading ? '查询中' : rpWinLot === row.lotId ? '关闭名单' : '名单') + '</span>' +
+        '<span class="rp-end">已结束</span>';
       if (row.status === 'fail') {
         tail += '<span class="rp-tag bad" title="' + esc(row.result) + '">失败</span>';
       }
@@ -801,7 +854,7 @@
       (row.status === 'fail' && row.result ? '<span class="rp-err">' + esc(row.result) + '</span>' : '') +
       '</div>' + rpCondTag(c) +
       '<span class="rp-left" data-lot="' + row.lotId + '">' + rpLeftText(row) + '</span>' + tail +
-      '</div>' + rpWinHtml(row) + '</div>';
+      '</div></div>';
   }
 
   function rpHtml() {
@@ -916,36 +969,56 @@
     return b;
   }
 
-  /* 中奖名单：已展开则收起，否则拉取 */
+  function rpWinParse(j) {
+    const raw = Array.isArray(j.data.list) ? j.data.list : [];
+    return raw.map((w) => ({
+      uid: w.uid,
+      name: String(w.name || w.uname || w.nickname || ''),
+      award: String(w.award_name || w.awardName || ''),
+      num: rpNum(w.gift_num || w.giftNum) || 1
+    })).filter((w) => w.uid);
+  }
+
+  /* 名单：再点一次关闭侧栏；未展开则拉取，空名单短轮询等待结算 */
   async function rpWinners(lotId) {
     const row = rpMap.get(lotId);
-    if (!row || row.winLoading) return;
-    if (row.win) {
-      row.win = null;
+    if (!row) return;
+    if (rpWinLot === lotId) {
+      closeWinPanel();
       rerender();
       return;
     }
+    if (row.winLoading || (row.win && row.win.list && row.win.list.length)) {
+      openWinPanel(lotId);
+      rerender();
+      return;
+    }
+    row.win = null;
     row.winLoading = true;
+    openWinPanel(lotId);
     rerender();
-    let j = null;
-    try {
-      j = await fetchJson(API_RPWIN + '?lot_id=' + encodeURIComponent(lotId) + '&write_off_only=false');
-    } catch (e) {
-      j = { code: -1, message: e.message || '网络错误' };
+    for (let i = 0; i < RP_WIN_TRIES; i++) {
+      let j = null;
+      try {
+        j = await fetchJson(API_RPWIN + '?lot_id=' + encodeURIComponent(lotId) + '&write_off_only=false');
+      } catch (e) {
+        j = { code: -1, message: e.message || '网络错误' };
+      }
+      if (rpNum(j && j.code) === 0 && j.data) {
+        row.win = { list: rpWinParse(j) };
+        if (row.win.list.length) break;
+      } else {
+        row.win = { err: (j && (j.code + (j.message ? '：' + j.message : ''))) || '未知错误' };
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+      if (rpWinLot !== lotId) {
+        row.winLoading = false;
+        return;
+      }
     }
     row.winLoading = false;
-    if (j && rpNum(j.code) === 0 && j.data) {
-      const raw = Array.isArray(j.data.list) ? j.data.list : [];
-      row.win = {
-        list: raw.map((w) => ({
-          uid: w.uid,
-          name: String(w.name || w.uname || w.nickname || ''),
-          num: rpNum(w.gift_num || w.num) || 1
-        })).filter((w) => w.uid)
-      };
-    } else {
-      row.win = { err: (j && (j.code + (j.message ? '：' + j.message : ''))) || '未知错误' };
-    }
+    paintWinPanel();
     rerender();
   }
 
@@ -977,7 +1050,6 @@
       row.result = '';
       rpDone.add(lotId);
       saveRp();
-      toast('红包参与成功', true);
     } else {
       row.status = 'fail';
       const cond = rpCond(row);
@@ -1229,6 +1301,7 @@
     clearTimeout(rerenderTimer);
     rerenderTimer = setTimeout(() => {
       if (document.getElementById(PANEL_ID)) renderPanel(renderArgs);
+      paintWinPanel();
     }, 300);
   }
 
@@ -1336,9 +1409,11 @@
       ${P('.rp-award')}{color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-err')}{color:#ff4d4f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-left')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;min-width:34px;text-align:right;}
-      ${P('.rp-go')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
+      ${P('.rp-go')},${P('.rp-win')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
         border-radius:4px;padding:1px 8px;cursor:pointer;}
-      ${P('.rp-go:hover')}{background:#fb7299;color:#fff;}
+      ${P('.rp-go:hover')},${P('.rp-win:hover')}{background:#fb7299;color:#fff;}
+      ${P('.rp-end')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;border:1px solid #9a9a9a;
+        border-radius:4px;padding:1px 8px;}
       ${P('.rp-tag')}{flex:0 0 auto;font-size:12px;border-radius:4px;padding:1px 6px;}
       ${P('.rp-tag.ok')}{color:#9adc9a;border:1px solid #9adc9a;}
       ${P('.rp-tag.wait')}{color:#f0a13c;border:1px solid #f0a13c;}
@@ -1346,11 +1421,22 @@
       ${P('.rp-cond')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;border:1px dashed rgba(255,255,255,.28);
         border-radius:4px;padding:0 5px;}
       ${P('.rp-cond-warn')}{color:#f0a13c;border-color:#f0a13c;}
-      ${P('.rp-win')}{flex:0 0 auto;font-size:12px;color:#7bd88f;cursor:pointer;}
-      ${P('.rp-win:hover')}{text-decoration:underline;}
-      ${P('.rp-win-list')}{margin:2px 0 0 0;font-size:12px;color:#9a9a9a;line-height:1.5;}
-      ${P('.rp-win-name')}{color:#e6e6e6;}
-      ${P('.rp-win-self')}{color:#ffd97a;font-weight:600;}
+      #${RPWIN_ID}{position:fixed;bottom:10px;z-index:2147483000;width:300px;box-sizing:border-box;
+        background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
+        color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
+        padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);display:flex;flex-direction:column;}
+      #${RPWIN_ID} .hd{position:relative;padding-right:56px;font-size:15px;font-weight:600;color:#fff;margin-bottom:10px;}
+      #${RPWIN_ID} .x{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
+        color:#9a9a9a;cursor:pointer;font-size:15px;font-weight:400;border-radius:4px;}
+      #${RPWIN_ID} .x:hover{color:#fff;background:rgba(255,255,255,.14);}
+      #${RPWIN_ID} .wl{flex:1 1 auto;overflow-y:auto;min-height:0;display:grid;
+        grid-template-columns:max-content max-content max-content;column-gap:10px;row-gap:6px;
+        align-items:center;justify-content:start;}
+      #${RPWIN_ID} .wl .dim{grid-column:1 / -1;}
+      #${RPWIN_ID} .wn{color:#e6e6e6;overflow:hidden;text-overflow:ellipsis;max-width:150px;}
+      #${RPWIN_ID} .wn.self{color:#ffd97a;font-weight:600;}
+      #${RPWIN_ID} .wp{color:#9a9a9a;}
+      #${RPWIN_ID} .wc{color:#9a9a9a;justify-self:end;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
     `;
     document.head.appendChild(st);
@@ -1591,6 +1677,7 @@
         if (t.classList.contains('x')) {
           stopCounters();
           closeLivePanel();
+          closeWinPanel();
           p.remove();
         } else if (t.classList.contains('lb')) {
           toggleLivePanel();
