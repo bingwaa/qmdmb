@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.6.9
+// @version      1.7.0
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1383,6 +1383,7 @@
       ${P('.tag')}{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         padding:1px 6px;margin-left:8px;vertical-align:middle;}
       ${P('.dim')}{color:#9a9a9a;font-size:12px;}
+      #${BEAT_ID}{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
       ${P('.save')}{margin:8px 0 0;color:#e6c07b;font-size:13px;}
       ${P('.save b')}{color:#ffd97a;font-size:15px;}
       ${P('.save-off')}{color:#9a9a9a;font-size:12px;}
@@ -1514,11 +1515,11 @@
       parts.push('WS心跳：等待页面心跳包');
     } else {
       const idle = Math.round((Date.now() - beatAt) / 1000);
-      parts.push('WS心跳：' + (idle * 1000 <= BEAT_TIMEOUT_MS ? '正常' : '中断'), '最近 ' + idle + ' 秒前');
-      if (beatGap > 0) parts.push('间隔 ' + Math.round(beatGap / 1000) + ' 秒');
-      parts.push('累计 ' + beatCount + ' 次');
+      parts.push('WS心跳：' + (idle * 1000 <= BEAT_TIMEOUT_MS ? '正常' : '中断'), '最近 ' + idle + 's');
+      if (beatGap > 0) parts.push('间隔 ' + Math.round(beatGap / 1000) + 's');
+      parts.push('累计 ' + beatCount);
     }
-    if (decodeFails) parts.push('解压失败 ' + decodeFails + ' 包');
+    if (decodeFails) parts.push('解压失败 ' + decodeFails);
     return parts.join(' · ');
   }
 
