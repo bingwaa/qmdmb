@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.6.7
+// @version      1.6.8
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1350,6 +1350,8 @@
         background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
         color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
+      /* 330 = 300 内容宽 + 左右内边距 14×2 + 边框，改用 border-box 后宽度不变，但 max-height 含内边距 */
+      #${PANEL_ID}{box-sizing:border-box;width:330px;max-height:600px;overflow-y:auto;}
       #${LIVE_PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
         width:max-content;min-width:300px;}
       #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;display:grid;
