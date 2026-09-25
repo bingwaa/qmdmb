@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.6.1
+// @version      1.6.2
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -44,6 +44,7 @@
   const API_RPDRAW = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDraw';
   const API_RPLOTTERY = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/lottery/getLotteryInfoWeb';
   const API_RPWIN = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketGetWinners';
+  const API_RELATION = 'https://api.bilibili.com/x/relation';
   const API_GUARDACTIVE = 'https://api.live.bilibili.com/xlive/general-interface/v1/guard/GuardActive';
   const API_NAV = 'https://api.bilibili.com/x/web-interface/nav';
   const COIN_EXP_PER_COIN = 10;
@@ -61,6 +62,7 @@
   const RP_SPM = '444.8.red_envelope.extract';
   const RP_POLL_MS = 5000;
   const RP_KEEP_MS = 10 * 60 * 1000;
+  const RP_REL_MS = 60 * 1000;
 
   const OP_HEARTBEAT = 2;
   const OP_AUTH = 7;
@@ -580,6 +582,9 @@
   let rpRoom = null;
   let rpPollTimer = null;
   let rpPolling = false;
+  let rpFollow = null;
+  let rpFollowAt = 0;
+  let rpFollowLoad = null;
 
   function nowSec() {
     return Math.floor(Date.now() / 1000);
@@ -681,10 +686,36 @@
 
   /* ---------- 红包参与条件 ---------- */
 
-  /* 关注按钮由页面渲染，两者都不存在时状态未知 */
+  /* 关注状态以 relation 接口为准，带缓存；force 为 true 时强制刷新 */
+  async function rpLoadFollow(force) {
+    const uid = rpRoom && rpRoom.uid;
+    if (!uid) return false;
+    if (!force && rpFollow !== null && Date.now() - rpFollowAt < RP_REL_MS) return false;
+    if (rpFollowLoad) return rpFollowLoad;
+    rpFollowLoad = rpFetchFollow(uid);
+    const changed = await rpFollowLoad;
+    rpFollowLoad = null;
+    return changed;
+  }
+
+  async function rpFetchFollow(uid) {
+    let attr = null;
+    try {
+      const j = await fetchJson(API_RELATION + '?fid=' + encodeURIComponent(uid));
+      if (j && rpNum(j.code) === 0 && j.data) attr = rpNum(j.data.attribute);
+    } catch (e) {}
+    if (!Number.isFinite(attr)) return false;
+    rpFollowAt = Date.now();
+    /* attribute: 2 已关注，6 互关 */
+    const follow = attr === 2 || attr === 6;
+    if (follow === rpFollow) return false;
+    rpFollow = follow;
+    return true;
+  }
+
   function rpFollowed() {
-    if (pick(FOLLOW_SEL)) return true;
-    if (pick(ENTRY_SEL)) return false;
+    if (rpFollow !== null) return rpFollow;
+    if (rpRoom && rpRoom.uid) rpLoadFollow(false).then((c) => { if (c) rerender(); });
     return null;
   }
 
@@ -695,6 +726,15 @@
     if (row.need === 1 || row.needFollow) return { text: '需先关注主播', met: rpFollowed() };
     if (row.shared) return { text: '需分享后参与', met: null };
     return null;
+  }
+
+  /* 条件明确未满足时不发请求，避免服务端替用户完成关注等操作 */
+  function rpCondBlock(row) {
+    const c = rpCond(row);
+    if (!c || c.met !== false) return null;
+    if (row.need === 2) return '需先加入粉丝团，请手动加入后再抢';
+    if (row.need === 3) return '需先开通大航海，无法参与';
+    return '需先关注主播，请手动关注后再抢';
   }
 
   function rpCondTag(c) {
@@ -733,25 +773,27 @@
     const awards = rpAwardText(row.awards);
     const ended = !!row.endTime && row.endTime <= nowSec();
     let tail;
-    if (row.status === 'done') {
+    if (ended) {
+      /* 结束后只留名单入口，参与状态由名单体现 */
+      tail = '<span class="rp-win" data-lot="' + row.lotId + '">' +
+        (row.winLoading ? '查询中' : row.win ? '收起名单' : '名单') + '</span>' +
+        '<span class="rp-tag">已结束</span>';
+      if (row.status === 'fail') {
+        tail += '<span class="rp-tag bad" title="' + esc(row.result) + '">失败</span>';
+      }
+    } else if (row.status === 'done') {
       tail = '<span class="rp-tag ok">' + esc(row.text || '已参与') + '</span>';
     } else if (row.status === 'joining') {
       tail = '<span class="rp-tag wait">请求中</span>';
     } else if (row.status === 'fail') {
       tail = '<span class="rp-tag bad" title="' + esc(row.result) + '">失败</span>' +
         '<span class="rp-go" data-lot="' + row.lotId + '">重试</span>';
-    } else if (ended) {
-      tail = '<span class="rp-tag">已结束</span>';
     } else {
       tail = '<span class="rp-go" data-lot="' + row.lotId + '">抢</span>';
     }
-    if (ended) {
-      tail = '<span class="rp-win" data-lot="' + row.lotId + '">' +
-        (row.winLoading ? '查询中' : row.win ? '收起名单' : '名单') + '</span>' + tail;
-    }
-    const c = row.status === 'done' ? null : rpCond(row);
+    const c = row.status === 'done' || ended ? null : rpCond(row);
     /* 服务端的禁用文案只在条件确实未满足或已失败时展示，避免已满足时误报 */
-    const note = row.disabled && (!c || c.met === false || row.status === 'fail') ? row.disabled : '';
+    const note = !ended && row.disabled && (!c || c.met === false || row.status === 'fail') ? row.disabled : '';
     return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
       '<span class="rp-title">' + esc(title) + '</span>' +
       (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
@@ -912,6 +954,13 @@
     if (!row || row.status === 'joining' || row.status === 'done') return;
     if (!rpRoom || !rpRoom.roomId || !rpRoom.uid) {
       toast('缺少房间或主播信息，无法参与', false);
+      return;
+    }
+    if (row.need === 1 || row.needFollow) await rpLoadFollow(true);
+    const block = rpCondBlock(row);
+    if (block) {
+      toast(block, false);
+      rerender();
       return;
     }
     row.status = 'joining';
@@ -1883,6 +1932,10 @@
       const medal = await getMyMedal(room.uid);
       const t = await fetchTasks(room.uid);
       const [coins, guardActive] = await Promise.all([fetchCoins(), fetchGuardActive(room.uid)]);
+      if (!rpRoom || rpRoom.uid !== room.uid) {
+        rpFollow = null;
+        rpFollowAt = 0;
+      }
       rpRoom = { roomId: room.roomId, uid: room.uid };
       startCounters(guardActive, room.uid);
       startRpPoll();
