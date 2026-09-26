@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.2
+// @version      1.7.3
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -580,6 +580,8 @@
     RED_POCKET_START: 1
   };
   const RPTYPE = { 1: '人气红包', 3: '电池红包', 4: '亲密红包', 5: '电池红包' };
+  /* 奖品非礼物的红包类型：3/5 电池红包、4 亲密红包；大航海红包由 rp_guard_info 标记 */
+  const RP_NO_TOTAL = { 3: 1, 4: 1, 5: 1 };
 
   const rpMap = new Map();
   let rpDone = new Set();
@@ -855,6 +857,9 @@
   function rpRowHtml(row) {
     const title = rpTypeName(row) + (row.sender ? ' · ' + row.sender : '');
     const awards = rpAwardText(row.awards, row.total);
+    /* 电池/亲密/大航海红包的奖品不是礼物，不单列总价值 */
+    const total = !row.guard && !RP_NO_TOTAL[row.rpType] && row.total
+      ? Math.round(row.total / GOLD_PER_BATTERY) : 0;
     const ended = !!row.endTime && row.endTime <= nowSec();
     let tail;
     if (ended) {
@@ -878,6 +883,7 @@
     const note = !ended && row.disabled && (!c || c.met === false || row.status === 'fail') ? row.disabled : '';
     return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
       '<span class="rp-title">' + esc(title) + '</span>' +
+      (total > 0 ? '<span class="rp-total">总价值：' + total + '电池</span>' : '') +
       (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
       (note ? '<span class="rp-err">' + esc(note) + '</span>' : '') +
       (row.status === 'fail' && row.result ? '<span class="rp-err">' + esc(row.result) + '</span>' : '') +
@@ -1450,6 +1456,7 @@
       ${P('.rp-meta')}{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
       ${P('.rp-title')}{color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-award')}{color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.rp-total')}{color:#ffd97a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-err')}{color:#ff4d4f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-left')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;min-width:34px;text-align:right;}
       ${P('.rp-go')},${P('.rp-win')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
