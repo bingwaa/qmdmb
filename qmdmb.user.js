@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.5
+// @version      1.7.6
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -77,6 +77,7 @@
   const RETRY_MS = 3 * 1000;
   const RETRY_MAX_MS = 60 * 1000;
 
+  const SHARE_GAIN = 2;
   const TASKMETA = {
     feedLight: '投喂粉丝灯牌',
     watchLive: '观看直播满15分钟',
@@ -91,7 +92,7 @@
     sendGift: '+1亲密度/电池',
     sendDanmu: '+1亲密度',
     like: '+1亲密度',
-    share: '+2亲密度'
+    share: '+' + SHARE_GAIN + '亲密度'
   };
   const TASKACT = {
     watchLive: '去观看',
@@ -103,7 +104,7 @@
   };
   /* 分享任务仅手机端任务列表返回，PC 端由面板本地补充；interact_type 3 为分享回调 */
   const SHARE_TYPE = 3;
-  const SHARE_FRIEND = '好友进房+5';
+  const SHARE_FRIEND = '好友进房再+5';
   const SHARE_STORE = 'qmdmb-share-';
   const TASKS_FALLBACK = [
     '观看直播 5 分钟 / 时长（每日有限额）',
@@ -152,13 +153,13 @@
   async function resolveRoom() {
     const ini = initialState();
     const ri = ini.roomInfo || ini.roomInitRes || {};
-    if (ri.room_id || ri.uid) return { roomId: ri.room_id, uid: ri.uid };
+    if (ri.room_id || ri.uid) return { roomId: ri.room_id, shortId: ri.short_id, uid: ri.uid };
     const urlId = getRoomId();
     if (!urlId) throw new Error('未识别到房间号');
     const j = await fetchJson(API_ROOMINIT + '?id=' + urlId);
     if (j.code !== 0) throw new Error('解析房间失败(' + j.code + ')：' + (j.message || ''));
     const d = j.data || {};
-    return { roomId: d.room_id || urlId, uid: d.uid };
+    return { roomId: d.room_id || urlId, shortId: d.short_id, uid: d.uid };
   }
 
   async function getRoomMeta(roomId) {
@@ -1444,6 +1445,8 @@
       ${P('.p-pill')}{flex:0 0 auto;font-size:12px;border-radius:12px;padding:2px 10px;white-space:nowrap;}
       ${P('.p-done')}{color:#9adc9a;border:1px solid #9adc9a;}
       ${P('.p-action')}{color:#fff;background:#f0a13c;border:1px solid #f0a13c;}
+      ${P('.p-share')}{color:#fff;background:#fb7299;border:1px solid #fb7299;cursor:pointer;}
+      ${P('.p-share:hover')}{background:#ff85a9;border-color:#ff85a9;}
       ${P('.journey')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
       ${P('.journey .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
       ${P('.journey .tt span')}{font-weight:400;margin-left:6px;}
@@ -1550,11 +1553,30 @@
     return '<div class="task"><div class="t-row"><span class="n">' + esc(name) + '</span>' +
       (done
         ? '<span class="p-pill p-done">已完成</span>'
-        : '<span class="p-pill p-action act-share">' + esc(TASKACT.share) + '</span>') + '</div>' +
+        : '<span class="p-pill p-share act-share">' + esc(TASKACT.share) + '</span>') + '</div>' +
       '<div class="t-meta">' + esc(TASKREWARD.share + ' · ' + SHARE_FRIEND + ' · 每日上限 ' + prog) + '</div></div>';
   }
 
   let shareBusy = false;
+
+  async function copyText(txt) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(txt);
+        return true;
+      }
+    } catch (e) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (e) { return false; }
+  }
 
   async function shareRoom() {
     if (shareBusy) return;
@@ -1578,7 +1600,8 @@
       const j = await r.json();
       if (j.code === 0) {
         markShared();
-        toast('分享成功，亲密度 +2', true);
+        const copied = await copyText((renderArgs && renderArgs.shareUrl) || 'https://live.bilibili.com/' + roomid);
+        toast(copied ? '分享成功，已复制分享链接' : '分享成功，链接复制失败', true);
         rerender();
       } else {
         toast('分享失败(' + j.code + ')：' + (j.message || ''), false);
@@ -1761,6 +1784,10 @@
       mid: '×' + g.num + (g.extra ? ' · 额外 +' + g.extra : ''),
       gained: g.battery + (g.extra || 0)
     }));
+    /* 服务端不返回分享任务，本地记录完成时补计该项 */
+    if (!tasks.some((t) => t.jump_type === 'share') && shareDone()) {
+      rows.push({ name: TASKMETA.share, mid: '1/1', gained: SHARE_GAIN });
+    }
 
     const sum = rows.reduce((a, r) => a + r.gained, 0);
     let body = rows.length ? rows.map(gainRowHtml).join('') : '<div class="dim">今日暂无亲密度增长</div>';
@@ -2170,6 +2197,8 @@
       renderPanel({
         room: { liveStatus: meta.liveStatus, uname: meta.uname },
         roomid: room.roomId,
+        /* 与直播间分享面板「复制链接」一致：短号优先 */
+        shareUrl: 'https://live.bilibili.com/' + (Number(room.shortId) || room.roomId),
         medal: medal,
         tasks: t.ok ? t.tasks : null,
         reason: t.ok ? null : t.reason,
