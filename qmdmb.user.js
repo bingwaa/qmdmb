@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.4
+// @version      1.7.5
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -41,6 +41,7 @@
   const API_ROOMSTATUS = 'https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids';
   const API_ONLINERANK = 'https://api.live.bilibili.com/xlive/general-interface/v1/rank/getOnlineGoldRank';
   const API_ACTIVATED = 'https://api.live.bilibili.com/xlive/app-ucenter/v1/fansMedal/GetActivatedMedalInfo';
+  const API_SHARE = 'https://api.live.bilibili.com/xlive/web-room/v1/index/TrigerInteract';
   const API_COINEXP = 'https://api.bilibili.com/x/web-interface/coin/today/exp';
   const API_RPDRAW = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/popularityRedPocket/RedPocketDraw';
   const API_RPLOTTERY = 'https://api.live.bilibili.com/xlive/lottery-interface/v1/lottery/getLotteryInfoWeb';
@@ -81,22 +82,29 @@
     watchLive: '观看直播满15分钟',
     sendGift: '投喂礼物',
     sendDanmu: '发弹幕',
-    like: '点赞30次'
+    like: '点赞30次',
+    share: '分享直播间'
   };
   const TASKREWARD = {
     feedLight: '+6亲密度',
     watchLive: '+1亲密度',
     sendGift: '+1亲密度/电池',
     sendDanmu: '+1亲密度',
-    like: '+1亲密度'
+    like: '+1亲密度',
+    share: '+2亲密度'
   };
   const TASKACT = {
     watchLive: '去观看',
     feedLight: '去投喂',
     sendGift: '去投喂',
     sendDanmu: '去发弹幕',
-    like: '去点赞'
+    like: '去点赞',
+    share: '去分享'
   };
+  /* 分享任务仅手机端任务列表返回，PC 端由面板本地补充；interact_type 3 为分享回调 */
+  const SHARE_TYPE = 3;
+  const SHARE_FRIEND = '好友进房+5';
+  const SHARE_STORE = 'qmdmb-share-';
   const TASKS_FALLBACK = [
     '观看直播 5 分钟 / 时长（每日有限额）',
     '首条投喂粉丝团灯牌',
@@ -1492,7 +1500,7 @@
   }
 
   function tasksHtml(tasks) {
-    const rows = tasks.map((t) => {
+    const rows = tasks.filter((t) => t.jump_type !== 'share').map((t) => {
       const type = t.jump_type;
       const name = TASKMETA[type] || t.title || '任务';
       const mm = /(\d+)\s*\/\s*(\d+)/.exec(String(t.sub_title || ''));
@@ -1505,6 +1513,80 @@
         (meta ? '<div class="t-meta">' + esc(meta) + '</div>' : '') + '</div>';
     }).join('');
     return rows || '<div class="dim">今日暂无可用任务</div>';
+  }
+
+  /* ---------- 分享直播间任务 ---------- */
+
+  function shareKey() {
+    return SHARE_STORE + getRoomId() + '-' + dayStamp();
+  }
+
+  function shareDone() {
+    try { return localStorage.getItem(shareKey()) === '1'; } catch (e) { return false; }
+  }
+
+  function markShared() {
+    const key = shareKey();
+    const room = getRoomId();
+    try {
+      if (room) {
+        const prefix = SHARE_STORE + room + '-';
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf(prefix) === 0 && k !== key) localStorage.removeItem(k);
+        }
+      }
+      localStorage.setItem(key, '1');
+    } catch (e) {}
+  }
+
+  /* 服务端若返回分享任务则以服务端进度为准，否则用本地记录 */
+  function shareTaskHtml(tasks) {
+    const t = tasks ? tasks.find((x) => x.jump_type === 'share') : null;
+    const done = t ? (t.is_done === 1 || t.is_done === true) : shareDone();
+    const mm = t ? /(\d+)\s*\/\s*(\d+)/.exec(String(t.sub_title || '')) : null;
+    const prog = mm ? mm[1] + '/' + mm[2] : (done ? '1/1' : '0/1');
+    const name = (t && t.title) || TASKMETA.share;
+    return '<div class="task"><div class="t-row"><span class="n">' + esc(name) + '</span>' +
+      (done
+        ? '<span class="p-pill p-done">已完成</span>'
+        : '<span class="p-pill p-action act-share">' + esc(TASKACT.share) + '</span>') + '</div>' +
+      '<div class="t-meta">' + esc(TASKREWARD.share + ' · ' + SHARE_FRIEND + ' · 每日上限 ' + prog) + '</div></div>';
+  }
+
+  let shareBusy = false;
+
+  async function shareRoom() {
+    if (shareBusy) return;
+    const roomid = renderArgs && renderArgs.roomid;
+    const csrf = cookie('bili_jct');
+    if (!roomid) { toast('未识别到房间号，分享失败', false); return; }
+    if (!csrf) { toast('未登录，分享失败', false); return; }
+    const body = new URLSearchParams();
+    body.set('roomid', String(roomid));
+    body.set('interact_type', String(SHARE_TYPE));
+    body.set('csrf', csrf);
+    body.set('csrf_token', csrf);
+    shareBusy = true;
+    try {
+      const r = await fetch(API_SHARE, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString()
+      });
+      const j = await r.json();
+      if (j.code === 0) {
+        markShared();
+        toast('分享成功，亲密度 +2', true);
+        rerender();
+      } else {
+        toast('分享失败(' + j.code + ')：' + (j.message || ''), false);
+      }
+    } catch (e) {
+      toast('分享出错：' + e.message, false);
+    }
+    shareBusy = false;
   }
 
   function journeyHtml(info) {
@@ -1734,6 +1816,8 @@
           rpJoin(Number(t.getAttribute('data-lot')));
         } else if (t.classList.contains('rp-win')) {
           rpWinners(Number(t.getAttribute('data-lot')));
+        } else if (t.classList.contains('act-share')) {
+          shareRoom();
         }
       });
       document.documentElement.appendChild(p);
@@ -1758,6 +1842,7 @@
     const name = medal ? (medal.medal_name || uname) : uname;
     const tasksSection = '<div class="tasks"><div class="tt">每日任务</div>' +
       (tasks ? tasksHtml(tasks) : TASKS_FALLBACK.map((t) => '<div class="task"><div class="t-meta">' + t + '</div></div>').join('')) +
+      shareTaskHtml(tasks) +
       '</div>';
 
     let medalRows = '';
@@ -2084,6 +2169,7 @@
       startRpPoll();
       renderPanel({
         room: { liveStatus: meta.liveStatus, uname: meta.uname },
+        roomid: room.roomId,
         medal: medal,
         tasks: t.ok ? t.tasks : null,
         reason: t.ok ? null : t.reason,
