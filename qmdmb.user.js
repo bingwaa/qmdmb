@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.0
+// @version      1.8.1
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -824,7 +824,7 @@
     const self = me && String(w.uid) === String(me);
     return '<span class="wn' + (self ? ' self' : '') + '">' + esc(w.name || ('uid ' + w.uid)) + '</span>' +
       '<span class="wp">' + esc(w.award || '') + '</span>' +
-      '<span class="wc">' + (w.num > 1 || String(w.award || '').indexOf('电池') >= 0 ? '×' + w.num : '') + '</span>';
+      '<span class="wc">' + (w.num > 1 || (w.num > 0 && String(w.award || '').indexOf('电池') >= 0) ? '×' + w.num : '') + '</span>';
   }
 
   function rpWinBody(row) {
@@ -871,10 +871,21 @@
     q.style.maxHeight = sizeMaxH(RPWIN_ID, lim) + 'px';
   }
 
+  /* 名单条目可能来自主面板，也可能来自雷达，两处共用同一个侧栏 */
+  function rpRowAny(lotId) {
+    return rpMap.get(lotId) || radarMap.get(lotId) || null;
+  }
+
+  /* 名单数据变化后重绘条目所属的面板 */
+  function rpWinRepaint(lotId) {
+    if (radarMap.has(lotId)) renderRadarPanel();
+    else rerender();
+  }
+
   function paintWinPanel() {
     const q = document.getElementById(RPWIN_ID);
     if (!q) return;
-    const row = rpMap.get(rpWinLot);
+    const row = rpRowAny(rpWinLot);
     q.innerHTML = '<div class="hd">中奖名单' +
       (row ? '<span class="dim"> ' + esc(rpTypeName(row)) + '</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
@@ -1031,10 +1042,10 @@
   }
 
   /* 先按 H5 形态请求，失败后按 PC 形态（不含 uid 与 statistics）重试一次 */
-  function rpBody(lotId, full) {
+  function rpBody(roomid, uid, lotId, full) {
     const b = {
-      room_id: rpRoom.roomId,
-      ruid: rpRoom.uid,
+      room_id: roomid,
+      ruid: uid,
       lot_id: lotId,
       spm_id: RP_SPM,
       jump_from: '',
@@ -1048,6 +1059,16 @@
     return b;
   }
 
+  /* 主面板与雷达共用：先 H5 形态，未成功且拿到响应时再按 PC 形态重试一次 */
+  async function rpDraw(roomid, uid, lotId) {
+    let j = await rpPost(rpBody(roomid, uid, lotId, true));
+    if (!j || rpNum(j.code) !== 0) {
+      const j2 = await rpPost(rpBody(roomid, uid, lotId, false));
+      if (j2 && (rpNum(j2.code) === 0 || !j.message)) j = j2;
+    }
+    return j;
+  }
+
   async function rpWinFetch(lotId) {
     try {
       return await fetchJson(API_RPWIN + '?lot_id=' + encodeURIComponent(lotId) + '&write_off_only=false');
@@ -1056,12 +1077,22 @@
     }
   }
 
-  /* 电池类奖品不是真实礼物（gift_id/gift_num 恒为 0），数量在 award_price，单位为金瓜子 */
+  /* 依次取第一个大于 0 的数值，H5 端对电池数量用的就是这种取值方式 */
+  function rpFirstPos(...vals) {
+    for (const v of vals) {
+      if (v === undefined || v === null || v === '') continue;
+      const n = rpNum(v);
+      if (n > 0) return n;
+    }
+    return 0;
+  }
+
+  /* 电池类奖品不是真实礼物，金额字段实测单位是金瓜子，100 金瓜子 = 1 电池；小于 100 的值按电池数处理 */
   function rpWinAward(w) {
     const name = String(w.award_name || w.awardName || '');
     if (name.indexOf('电池') >= 0) {
-      const gold = rpNum(w.award_price || w.awardPrice) || rpNum(w.gift_num || w.giftNum);
-      return { award: name, num: Math.round(gold / GOLD_PER_BATTERY) || 1 };
+      const n = rpFirstPos(w.battery_amount, w.batteryAmount, w.gift_num, w.giftNum, w.award_price, w.awardPrice);
+      return { award: name, num: n >= GOLD_PER_BATTERY ? Math.round(n / GOLD_PER_BATTERY) : n };
     }
     return { award: name, num: rpNum(w.gift_num || w.giftNum) || 1 };
   }
@@ -1082,17 +1113,17 @@
 
   /* 名单侧栏由面板里的 × 关闭；切换红包则改为显示该红包的名单，空名单短轮询等待结算 */
   async function rpWinners(lotId) {
-    const row = rpMap.get(lotId);
+    const row = rpRowAny(lotId);
     if (!row) return;
     if (row.winLoading || (row.win && row.win.list && row.win.list.length)) {
       openWinPanel(lotId);
-      rerender();
+      rpWinRepaint(lotId);
       return;
     }
     row.win = null;
     row.winLoading = true;
     openWinPanel(lotId);
-    rerender();
+    rpWinRepaint(lotId);
     for (let i = 0; i < RP_WIN_TRIES; i++) {
       const j = await rpWinFetch(lotId);
       if (rpNum(j && j.code) === 0 && j.data) {
@@ -1110,7 +1141,7 @@
     }
     row.winLoading = false;
     paintWinPanel();
-    rerender();
+    rpWinRepaint(lotId);
   }
 
   async function rpJoin(lotId) {
@@ -1129,11 +1160,7 @@
     }
     row.status = 'joining';
     rerender();
-    let j = await rpPost(rpBody(lotId, true));
-    if (!j || rpNum(j.code) !== 0) {
-      const j2 = await rpPost(rpBody(lotId, false));
-      if (j2 && (rpNum(j2.code) === 0 || !j.message)) j = j2;
-    }
+    const j = await rpDraw(rpRoom.roomId, rpRoom.uid, lotId);
     const code = j ? rpNum(j.code) : -1;
     if (code === 0) {
       row.status = 'done';
@@ -2304,6 +2331,11 @@
     return RADAR_COLD[RADAR_NUMS[RADAR_NUMS.length - 1]];
   }
 
+  /* 固定节拍会让整批房间同时到期，间隔统一加 ±15% 抖动 */
+  function radarJitter(ms) {
+    return Math.round(ms * (0.85 + Math.random() * 0.3));
+  }
+
   function radarTime(ts) {
     const d = new Date(ts);
     return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
@@ -2594,6 +2626,12 @@
       uname: room.uname,
       rtitle: room.title,
       online: 0,
+      /* 跨房间参与的本地状态：在途、已参与、失败原因，以及名单侧栏共用的字段 */
+      joining: false,
+      mine: false,
+      result: '',
+      win: null,
+      winLoading: false,
       at: Date.now()
     });
     return 1;
@@ -2646,7 +2684,7 @@
     const now = Date.now();
     if (!ok) {
       room.fail++;
-      room.nextAt = now + (room.fail >= RADAR_FAILS ? RADAR_COOL_MS : radarCold());
+      room.nextAt = now + radarJitter(room.fail >= RADAR_FAILS ? RADAR_COOL_MS : radarCold());
       if (++radarFails >= RADAR_FAILS) {
         radarFails = 0;
         radarPauseUntil = now + RADAR_COOL_MS;
@@ -2670,7 +2708,7 @@
       if (st) changed = true;
       if (st === 1) fresh++;
     });
-    room.nextAt = now + (hot ? RP_POLL_MS : radarCold());
+    room.nextAt = now + radarJitter(hot ? RP_POLL_MS : radarCold());
     if (changed) renderRadarPanel();
     else paintRadarLefts();
     if (fresh) {
@@ -2768,8 +2806,9 @@
     else parts.push('未启动');
     if (radarMap.size) parts.push('命中 ' + radarMap.size);
     if (radarOn && radarFetchAt) parts.push(radarTime(radarFetchAt) + ' 更新');
-    if (radarOn && radarPauseUntil > Date.now() && radarPauseMsg) parts.push(radarPauseMsg);
-    else if (radarOn && radarDiag) parts.push(radarDiag);
+    if (radarOn && radarPauseUntil > Date.now() && radarPauseMsg) {
+      parts.push(radarPauseMsg + ' ' + Math.ceil((radarPauseUntil - Date.now()) / 1000) + 's');
+    } else if (radarOn && radarDiag) parts.push(radarDiag);
     return parts.join(' · ');
   }
 
@@ -2810,18 +2849,32 @@
     const total = !row.guard && !RP_NO_TOTAL[row.rpType] && row.total
       ? Math.round(row.total / GOLD_PER_BATTERY) : 0;
     const cond = radarCondText(row);
-    const tail = row.endTime && row.endTime <= nowSec()
-      ? '<span class="rp-x" data-lot="' + row.lotId + '" title="已结束，点击移除">×</span>'
-      : '<a class="rp-go" href="https://live.bilibili.com/' + Number(row.roomid) +
+    /* 抢失败的原因优先显示，其次是条件提示 */
+    const condHtml = row.result
+      ? '<span class="rp-cond rp-cond-warn">' + esc(row.result) + '</span>'
+      : (cond ? '<span class="rp-cond">' + esc(cond) + '</span>' : '');
+    /* 与主面板一致：未结束显示已参与或抢，倒计时结束后换成名单与 × */
+    let tail;
+    if (row.endTime && row.endTime <= nowSec()) {
+      tail = '<span class="rp-win" data-lot="' + row.lotId + '">' +
+        (row.winLoading ? '查询中' : '名单') + '</span>' +
+        '<span class="rp-x" data-lot="' + row.lotId + '" title="已结束，点击移除">×</span>';
+    } else {
+      /* 不进入直播间直接参与；参与条件在点击时校验，不代替用户关注或加入粉丝团 */
+      const grab = row.mine
+        ? '<span class="rp-tag ok">已参与</span>'
+        : '<span class="rp-go" data-lot="' + row.lotId + '">' + (row.joining ? '抢…' : '抢') + '</span>';
+      tail = grab + '<a class="rp-go" href="https://live.bilibili.com/' + Number(row.roomid) +
         '" target="_blank" rel="noopener"' + (row.rtitle ? ' title="' + esc(row.rtitle) + '"' : '') +
         '>进入</a>';
+    }
     return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
       '<span class="rp-top"><span class="rp-anchor">' + esc(anchor) + '</span>' +
       '<span class="rp-on" data-lot="' + row.lotId + '">' + esc(radarOnlineText(row)) + '</span></span>' +
       (title ? '<span class="rp-title">' + esc(title) + '</span>' : '') +
       (total > 0 ? '<span class="rp-total">总价值：' + total + '电池</span>' : '') +
       (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
-      '</div>' + (cond ? '<span class="rp-cond">' + esc(cond) + '</span>' : '') +
+      '</div>' + condHtml +
       '<span class="rp-left" data-lot="' + row.lotId + '">' + rpLeftText(row) + '</span>' +
       tail + '</div></div>';
   }
@@ -2829,6 +2882,77 @@
   /* 已结束的红包由用户手动移除，避免长期占位 */
   function radarDrop(lotId) {
     if (!radarMap.delete(lotId)) return;
+    renderRadarPanel();
+  }
+
+  /* 跨房间只能查到关注状态，粉丝团与大航海状态无法查询，只能拒绝 */
+  const radarFollows = new Map();
+
+  async function radarFollow(uid) {
+    const c = radarFollows.get(uid);
+    if (c && Date.now() - c.at < RP_REL_MS) return c.follow;
+    try {
+      const j = await fetchJson(API_RELATION + '?fid=' + encodeURIComponent(uid));
+      if (!j || rpNum(j.code) !== 0 || !j.data) return null;
+      /* attribute: 2 已关注，6 互关 */
+      const attr = rpNum(j.data.attribute);
+      const follow = attr === 2 || attr === 6;
+      radarFollows.set(uid, { at: Date.now(), follow: follow });
+      return follow;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* 条件未满足时不发请求，服务端会在参与时替用户关注或送灯牌加入粉丝团 */
+  async function radarGrabBlock(row) {
+    if (row.need === 2) return '需先加入粉丝团，请手动加入后再抢';
+    if (row.need === 3) return '需先开通大航海，无法参与';
+    if (row.shared) return '需分享后参与';
+    if (row.need === 1 || row.needFollow) {
+      const f = await radarFollow(row.uid);
+      if (f === null) return '关注状态查询失败，请稍后再试';
+      if (!f) return '需先关注主播，请手动关注后再抢';
+    }
+    return '';
+  }
+
+  /* 跨房间参与：请求体自带房间号与主播 uid，不需要进入该直播间 */
+  async function radarGrab(lotId) {
+    const row = radarMap.get(lotId);
+    if (!row || row.joining || row.mine) return;
+    if (!row.roomid || !row.uid) {
+      toast('缺少房间或主播信息，无法参与', false);
+      return;
+    }
+    if (radarPauseUntil > Date.now()) {
+      toast('雷达已触发风控暂停，稍后再试', false);
+      return;
+    }
+    row.joining = true;
+    row.result = '';
+    renderRadarPanel();
+    const block = await radarGrabBlock(row);
+    /* 等待期间条目可能已被移除 */
+    if (!radarMap.has(lotId)) return;
+    if (block) {
+      row.joining = false;
+      row.result = block;
+      toast(block, false);
+      renderRadarPanel();
+      return;
+    }
+    const j = await rpDraw(row.roomid, row.uid, lotId);
+    if (!radarMap.has(lotId)) return;
+    row.joining = false;
+    const code = j ? rpNum(j.code) : -1;
+    if (code === 0) {
+      row.mine = true;
+      toast('已参与「' + (row.uname || ('房间 ' + row.roomid)) + '」的红包', true);
+    } else {
+      row.result = code + (j && j.message ? '：' + j.message : '');
+      toast('抢红包失败：' + row.result, false);
+    }
     renderRadarPanel();
   }
 
@@ -2924,6 +3048,11 @@
         else if (t.classList.contains('rd-num')) selectRadarNum(Number(t.getAttribute('data-num')));
         else if (t.classList.contains('rd-run')) radarToggleRun();
         else if (t.classList.contains('rp-x')) radarDrop(Number(t.getAttribute('data-lot')));
+        else if (t.classList.contains('rp-win')) rpWinners(Number(t.getAttribute('data-lot')));
+        /* 「进入」是不带 data-lot 的链接，只有「抢」按红包 id 派发 */
+        else if (t.classList.contains('rp-go') && t.hasAttribute('data-lot')) {
+          radarGrab(Number(t.getAttribute('data-lot')));
+        }
       });
       document.documentElement.appendChild(q);
     }
@@ -2963,6 +3092,8 @@
     stopRadarTimer();
     const q = document.getElementById(RADAR_ID);
     if (q) q.remove();
+    /* 名单侧栏取自雷达条目时一并关闭，避免留下无主的侧栏 */
+    if (rpWinLot && !rpMap.has(rpWinLot)) closeWinPanel();
     toggleRadarBtn();
     syncLiveBox();
   }
