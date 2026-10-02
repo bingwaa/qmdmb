@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.8
+// @version      1.7.9
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1441,10 +1441,10 @@
         border-top:2px solid #fb7299;border-right:2px solid #fb7299;border-top-right-radius:8px;}
       #${PANEL_ID} .rs:hover::after,#${LIVE_PANEL_ID} .rs:hover::after,
       #${RADAR_ID} .rs:hover::after,#${RPWIN_ID} .rs:hover::after{border-color:#ffb0c6;}
-      /* 主面板高度固定，宽度由内容撑开；视口不足时由 max-height 收缩 */
+      /* 主面板宽度由内容撑开；高度由脚本按有无粉丝团决定，视口不足时由 max-height 收缩 */
       #${PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
         width:max-content;min-width:330px;max-width:calc(100vw - 20px);
-        height:${PANEL_H}px;max-height:calc(100vh - 20px);overflow:hidden;}
+        max-height:calc(100vh - 20px);overflow:hidden;}
       #${PANEL_ID} .body{flex:1 1 auto;overflow-y:auto;min-height:0;}
       #${LIVE_PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
         width:max-content;min-width:220px;}
@@ -1583,7 +1583,7 @@
   const RESIZE_HTML = '<span class="rs" title="拖动调整面板大小"></span>';
   const PANEL_MIN_W = 220;
   const PANEL_MIN_H = 140;
-  /* 主面板固定高度，与样式表中的 height 共用同一个值 */
+  /* 主面板在有粉丝团时的固定高度 */
   const PANEL_H = 750;
   let panelSizes = {};
 
@@ -1905,8 +1905,8 @@
 
     const sz = panelSizes[PANEL_ID];
     if (sz) p.style.width = sz.w + 'px';
-    /* 高度固定，视口不足时由 CSS 的 max-height 收缩；拖拽过则以拖拽值为准 */
-    p.style.height = sizeMaxH(PANEL_ID, PANEL_H) + 'px';
+    /* 有粉丝团时高度固定，无粉丝团时随内容；视口不足由 CSS 的 max-height 收缩 */
+    p.style.height = medal ? sizeMaxH(PANEL_ID, PANEL_H) + 'px' : 'auto';
 
     if (!medal && !tasks) {
       p.innerHTML = '<div class="body">' +
