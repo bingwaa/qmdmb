@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.9
+// @version      1.8.0
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1515,8 +1515,13 @@
       ${P('.rp-row')}{display:flex;align-items:center;gap:8px;}
       ${P('.rp-meta')}{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
       ${P('.rp-title')}{color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      /* 雷达行首的主播名 */
-      ${P('.rp-anchor')}{color:#fb7299;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* 雷达行首的主播名与同接 */
+      ${P('.rp-top')}{display:flex;align-items:center;gap:6px;min-width:0;}
+      ${P('.rp-anchor')}{flex:0 1 auto;min-width:0;color:#fb7299;font-weight:600;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* 同接与奖品行同字号同色 */
+      ${P('.rp-on')}{flex:0 0 auto;color:#9a9a9a;font-size:12px;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       /* 奖品名过长时换行显示，不截断 */
       ${P('.rp-award')}{color:#9a9a9a;font-size:12px;white-space:normal;word-break:break-word;}
       ${P('.rp-total')}{color:#ffd97a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -2266,6 +2271,9 @@
   let radarNewTimer = null;
   /* 已结束条目数，变化时重绘一次，把「进入」换成 × */
   let radarEndedMark = -1;
+  /* 命中的直播间同接：逐房间查询，与所有直播间面板同一接口 */
+  let radarOnlineBusy = false;
+  let radarOnlineAt = 0;
 
   function radarPrefLoad() {
     try {
@@ -2447,6 +2455,8 @@
       if (!j || rpNum(j.code) !== 0) return null;
       Object.keys(j.data || {}).forEach((k) => {
         const r = radarRoom(j.data[k]);
+        /* 该接口以 uid 为键，项内可能不含 uid，缺省用键补齐 */
+        if (r && !r.uid) r.uid = rpNum(k);
         if (r) out.push(r);
       });
       if (i + VUP_CHUNK < uids.length) await new Promise((r) => setTimeout(r, 120));
@@ -2580,8 +2590,10 @@
       needFollow: !!info.needFollow,
       shared: !!info.shared,
       roomid: room.roomid,
+      uid: room.uid,
       uname: room.uname,
       rtitle: room.title,
+      online: 0,
       at: Date.now()
     });
     return 1;
@@ -2661,7 +2673,10 @@
     room.nextAt = now + (hot ? RP_POLL_MS : radarCold());
     if (changed) renderRadarPanel();
     else paintRadarLefts();
-    if (fresh) radarToast(fresh);
+    if (fresh) {
+      radarToast(fresh);
+      radarRefreshOnline();
+    }
   }
 
   function startRadarTimer() {
@@ -2732,6 +2747,7 @@
         .sort((a, b) => a.nextAt - b.nextAt);
       for (let i = 0; i < due.length && n < RADAR_CONC; i++, n++) radarScan(due[i]);
     }
+    if (now - radarOnlineAt > LIVE_ONLINE_MS) radarRefreshOnline();
     paintRadarStat();
   }
 
@@ -2800,7 +2816,8 @@
         '" target="_blank" rel="noopener"' + (row.rtitle ? ' title="' + esc(row.rtitle) + '"' : '') +
         '>进入</a>';
     return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
-      '<span class="rp-anchor">' + esc(anchor) + '</span>' +
+      '<span class="rp-top"><span class="rp-anchor">' + esc(anchor) + '</span>' +
+      '<span class="rp-on" data-lot="' + row.lotId + '">' + esc(radarOnlineText(row)) + '</span></span>' +
       (title ? '<span class="rp-title">' + esc(title) + '</span>' : '') +
       (total > 0 ? '<span class="rp-total">总价值：' + total + '电池</span>' : '') +
       (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
@@ -2830,6 +2847,38 @@
       const t = rpLeftText(row);
       if (el.textContent !== t) el.textContent = t;
     });
+  }
+
+  function radarOnlineText(row) {
+    return '同接 ' + fmtOnline(row.online);
+  }
+
+  function paintRadarOnline(lotId) {
+    const q = document.getElementById(RADAR_ID);
+    const row = radarMap.get(lotId);
+    const el = q && q.querySelector('.rp-on[data-lot="' + lotId + '"]');
+    if (el && row) el.textContent = radarOnlineText(row);
+  }
+
+  /* 逐房间取真实在线人数，与所有直播间面板同一接口；串行请求以限制速率 */
+  async function radarRefreshOnline() {
+    if (radarOnlineBusy || !radarMap.size) return;
+    radarOnlineBusy = true;
+    radarOnlineAt = Date.now();
+    try {
+      const rows = Array.from(radarMap.values());
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row.roomid || !row.uid || !radarMap.has(row.lotId)) continue;
+        const n = await fetchOnlineNum(row.roomid, row.uid);
+        if (n == null) continue;
+        row.online = n;
+        paintRadarOnline(row.lotId);
+      }
+    } catch (e) {
+    } finally {
+      radarOnlineBusy = false;
+    }
   }
 
   function paintRadarStat() {
