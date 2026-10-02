@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.7.7
+// @version      1.7.8
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -68,6 +68,39 @@
   const RP_WIN_TRIES = 6;
   const RP_WIN_MAX = 30;
   const LIVE_MAX = 20;
+
+  const RADAR_ID = 'qmdmb-fanpanel-radar';
+  const API_AREALIST = 'https://api.live.bilibili.com/room/v1/Area/getList';
+  /* 主端点实测无需签名可用（page_size 实测 50、80 均生效），备用端点分页 20 条但可能要求签名 */
+  const API_AREAROOMS = 'https://api.live.bilibili.com/room/v1/Area/getRoomList';
+  const API_AREAROOMS_ALT = 'https://api.live.bilibili.com/xlive/web-interface/v1/second/getList';
+  const RADAR_STORE = 'qmdmb-radar';
+  const RADAR_NUMS = [100, 200, 300, 400, 500];
+  /* 命中红包的房间按 5s 快轮询，冷房间按档位放慢 */
+  const RADAR_COLD = { 100: 45000, 200: 90000, 300: 120000, 400: 150000, 500: 180000 };
+  const RADAR_CONC = 2;
+  const RADAR_PAGE_SIZE = 80;
+  const RADAR_LIST_MS = 5 * 60 * 1000;
+  const RADAR_COOL_MS = 60 * 1000;
+  const RADAR_FAILS = 5;
+  /* 归属分组：成员 uid 取自 vup-json 的 group_name，房间与开播状态由批量接口补齐 */
+  const RADAR_GROUPS = [
+    { key: 'vr', name: 'VR', group: 'VirtuaReal' },
+    { key: 'psp', name: 'PSP', group: 'P-SP' }
+  ];
+  const API_VUP = 'https://api.ukamnads.icu/api/v2/vup-list';
+  const API_VUP_ALT = 'https://vup-json.laplace.live/vup-slim.json';
+  const API_UIDSTATUS = 'https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids';
+  const VUP_STORE = 'qmdmb-vup';
+  const VUP_MS = 12 * 60 * 60 * 1000;
+  const VUP_CHUNK = 100;
+  /* 分区列表接口失败时的兜底父分区 */
+  const RADAR_AREAS_FALLBACK = [
+    { id: 1, name: '娱乐' }, { id: 2, name: '网游' }, { id: 3, name: '手游' },
+    { id: 4, name: '绘画' }, { id: 5, name: '电台' }, { id: 6, name: '单机游戏' },
+    { id: 7, name: '生活' }, { id: 8, name: '影视' }, { id: 9, name: '虚拟主播' },
+    { id: 10, name: '赛事' }, { id: 11, name: '知识' }
+  ];
 
   const OP_HEARTBEAT = 2;
   const OP_AUTH = 7;
@@ -135,6 +168,13 @@
 
   async function fetchJson(url) {
     const r = await fetch(url, { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }
+
+  /* 站外接口允许任意来源但不允许带凭据，带 cookie 会被 CORS 拒绝 */
+  async function fetchJsonOmit(url) {
+    const r = await fetch(url, { credentials: 'omit' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }
@@ -814,6 +854,7 @@
     rpWinLot = 0;
     const q = document.getElementById(RPWIN_ID);
     if (q) q.remove();
+    syncRadarBox();
     if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
   }
 
@@ -823,9 +864,11 @@
     if (!q || !p) return;
     const r = p.getBoundingClientRect();
     q.style.left = Math.round(r.right + 10) + 'px';
-    q.style.top = Math.round(r.top) + 'px';
-    q.style.bottom = 'auto';
-    q.style.maxHeight = Math.max(160, Math.round(window.innerHeight - r.top - 10)) + 'px';
+    q.style.top = 'auto';
+    q.style.bottom = '10px';
+    const lim = Math.max(160, window.innerHeight - 20);
+    if (panelSizes[RPWIN_ID]) q.style.width = panelSizes[RPWIN_ID].w + 'px';
+    q.style.maxHeight = sizeMaxH(RPWIN_ID, lim) + 'px';
   }
 
   function paintWinPanel() {
@@ -835,9 +878,10 @@
     q.innerHTML = '<div class="hd">中奖名单' +
       (row ? '<span class="dim"> ' + esc(rpTypeName(row)) + '</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
-      '<div class="wl">' + rpWinBody(row) + '</div>';
+      '<div class="wl">' + rpWinBody(row) + '</div>' + RESIZE_HTML;
     capRows(q.querySelector('.wl'), RP_WIN_MAX);
     syncWinBox();
+    syncRadarBox();
     if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
   }
 
@@ -896,7 +940,7 @@
   function rpHtml() {
     const rows = Array.from(rpMap.values()).sort((a, b) => a.endTime - b.endTime);
     const body = rows.length ? rows.map(rpRowHtml).join('') : '<div class="dim">未检测到红包</div>';
-    return '<div class="rp"><div class="tt">红包</div>' + body + '</div>';
+    return '<div class="rp"><div class="tt">红包' + radarBtnHtml() + '</div>' + body + '</div>';
   }
 
   function paintRedPackets() {
@@ -1379,19 +1423,32 @@
     if (document.getElementById(STYLE_ID)) return;
     const st = document.createElement('style');
     st.id = STYLE_ID;
-    /* IDS 用于面板容器本身，P(sel) 展开成两个面板的同名后代选择器 */
-    const IDS = '#' + PANEL_ID + ',#' + LIVE_PANEL_ID;
-    const P = (sel) => '#' + PANEL_ID + ' ' + sel + ',#' + LIVE_PANEL_ID + ' ' + sel;
+    /* IDS 用于面板容器本身，P(sel) 展开成多个面板的同名后代选择器 */
+    const IDS = '#' + PANEL_ID + ',#' + LIVE_PANEL_ID + ',#' + RADAR_ID;
+    const P = (sel) =>
+      '#' + PANEL_ID + ' ' + sel + ',#' + LIVE_PANEL_ID + ' ' + sel + ',#' + RADAR_ID + ' ' + sel;
     st.textContent = `
       ${IDS}{position:fixed;left:10px;bottom:10px;z-index:2147483000;width:300px;
         background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
         color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
-      /* 330 = 300 内容宽 + 左右内边距 14×2 + 边框，改用 border-box 后宽度不变，但 max-height 含内边距 */
-      #${PANEL_ID}{box-sizing:border-box;width:330px;max-height:750px;overflow-y:auto;}
+      /* 每个面板右上角固定一个拖拽把手，落在内边距里，滚动交给内层容器，把手不随内容滚动 */
+      #${PANEL_ID} .rs,#${LIVE_PANEL_ID} .rs,#${RADAR_ID} .rs,#${RPWIN_ID} .rs{
+        position:absolute;right:0;top:0;width:12px;height:12px;cursor:nesw-resize;z-index:6;}
+      /* 弧的圆心与面板右上圆角同心，半径取面板圆角减 2，正好落在圆角内侧 */
+      #${PANEL_ID} .rs::after,#${LIVE_PANEL_ID} .rs::after,#${RADAR_ID} .rs::after,#${RPWIN_ID} .rs::after{
+        content:'';position:absolute;right:2px;top:2px;width:8px;height:8px;
+        border-top:2px solid #fb7299;border-right:2px solid #fb7299;border-top-right-radius:8px;}
+      #${PANEL_ID} .rs:hover::after,#${LIVE_PANEL_ID} .rs:hover::after,
+      #${RADAR_ID} .rs:hover::after,#${RPWIN_ID} .rs:hover::after{border-color:#ffb0c6;}
+      /* 主面板高度固定，宽度由内容撑开；视口不足时由 max-height 收缩 */
+      #${PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
+        width:max-content;min-width:330px;max-width:calc(100vw - 20px);
+        height:${PANEL_H}px;max-height:calc(100vh - 20px);overflow:hidden;}
+      #${PANEL_ID} .body{flex:1 1 auto;overflow-y:auto;min-height:0;}
       #${LIVE_PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
-        width:max-content;min-width:300px;}
-      #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow-y:auto;min-height:0;display:grid;
+        width:max-content;min-width:220px;}
+      #${LIVE_PANEL_ID} .list{flex:1 1 auto;overflow:auto;min-height:0;display:grid;
         grid-template-columns:max-content max-content max-content max-content max-content;
         column-gap:10px;row-gap:6px;align-items:center;align-content:start;justify-content:start;white-space:nowrap;}
       #${LIVE_PANEL_ID} .list .dim{grid-column:1 / -1;}
@@ -1413,10 +1470,12 @@
       ${P('.x')}{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
         color:#9a9a9a;cursor:pointer;font-size:15px;font-weight:400;border-radius:4px;}
       ${P('.x:hover')}{color:#fff;background:rgba(255,255,255,.14);}
-      ${P('.lb')}{position:absolute;right:22px;top:1px;height:16px;line-height:16px;padding:0 4px;
-        color:#9a9a9a;cursor:pointer;font-size:12px;font-weight:400;border-radius:4px;}
-      ${P('.lb:hover')}{color:#fff;background:rgba(255,255,255,.14);}
-      ${P('.lb.on')}{color:#fb7299;}
+      /* 标题行按钮统一为粉色描边，与红包行的按钮一致 */
+      ${P('.lb')}{position:absolute;right:24px;top:1px;box-sizing:border-box;height:16px;line-height:14px;
+        padding:0 5px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
+        cursor:pointer;font-size:12px;font-weight:400;}
+      ${P('.lb.on')}{background:rgba(251,114,153,.18);}
+      ${P('.lb:hover')}{background:#fb7299;color:#fff;}
       ${P('.tag')}{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         padding:1px 6px;margin-left:8px;vertical-align:middle;}
       ${P('.dim')}{color:#9a9a9a;font-size:12px;}
@@ -1451,18 +1510,25 @@
       ${P('.g-sum')}{margin-top:7px;font-size:12px;color:#9a9a9a;}
       ${P('.g-sum b')}{color:#ffd97a;font-size:14px;}
       ${P('.rp')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      ${P('.rp .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.rp .tt')}{position:relative;padding-right:44px;color:#fb7299;font-weight:600;margin-bottom:6px;}
       ${P('.rp-item')}{margin:5px 0;}
       ${P('.rp-row')}{display:flex;align-items:center;gap:8px;}
       ${P('.rp-meta')}{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
       ${P('.rp-title')}{color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      ${P('.rp-award')}{color:#9a9a9a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* 雷达行首的主播名 */
+      ${P('.rp-anchor')}{color:#fb7299;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      /* 奖品名过长时换行显示，不截断 */
+      ${P('.rp-award')}{color:#9a9a9a;font-size:12px;white-space:normal;word-break:break-word;}
       ${P('.rp-total')}{color:#ffd97a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-err')}{color:#ff4d4f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-left')}{flex:0 0 auto;font-size:12px;color:#9a9a9a;min-width:34px;text-align:right;}
       ${P('.rp-go')},${P('.rp-win')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
-        border-radius:4px;padding:1px 8px;cursor:pointer;}
+        border-radius:4px;padding:1px 8px;cursor:pointer;white-space:nowrap;text-decoration:none;}
       ${P('.rp-go:hover')},${P('.rp-win:hover')}{background:#fb7299;color:#fff;}
+      /* 雷达中已结束的红包用 × 移除 */
+      ${P('.rp-x')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
+        border-radius:4px;padding:1px 8px;cursor:pointer;white-space:nowrap;}
+      ${P('.rp-x:hover')}{background:#fb7299;color:#fff;}
       ${P('.rp-tag')}{flex:0 0 auto;font-size:12px;border-radius:4px;padding:1px 6px;}
       ${P('.rp-tag.ok')}{color:#fb7299;border:1px solid #fb7299;}
       ${P('.rp-tag.wait')}{color:#f0a13c;border:1px solid #f0a13c;}
@@ -1487,8 +1553,99 @@
       #${RPWIN_ID} .wp{color:#9a9a9a;}
       #${RPWIN_ID} .wc{color:#9a9a9a;justify-self:end;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
+      ${P('.rp-radar')}{position:absolute;right:0;top:0;box-sizing:border-box;height:16px;line-height:14px;
+        padding:0 5px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
+        cursor:pointer;font-size:12px;font-weight:400;}
+      ${P('.rp-radar.on')}{background:rgba(251,114,153,.18);}
+      ${P('.rp-radar:hover')}{background:#fb7299;color:#fff;}
+      #${RADAR_ID}{display:flex;flex-direction:column;box-sizing:border-box;width:330px;}
+      #${RADAR_ID} .rd-areas{display:flex;flex-wrap:wrap;gap:4px 6px;margin-bottom:6px;}
+      #${RADAR_ID} .rd-nums{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;}
+      #${RADAR_ID} .rd-btn{font-size:12px;color:#9a9a9a;border:1px solid rgba(255,255,255,.28);
+        border-radius:4px;padding:0 6px;cursor:pointer;user-select:none;}
+      #${RADAR_ID} .rd-btn:hover{color:#fff;border-color:rgba(255,255,255,.6);}
+      #${RADAR_ID} .rd-btn.on{color:#fb7299;border-color:#fb7299;}
+      #${RADAR_ID} .rd-run{margin-left:auto;color:#fb7299;border-color:#fb7299;}
+      #${RADAR_ID} .rd-run.on{color:#9a9a9a;border-color:rgba(255,255,255,.28);}
+      #${RADAR_ID} .rd-stat{font-size:12px;color:#9a9a9a;margin-bottom:6px;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      #${RADAR_ID} .rd-list{flex:1 1 auto;overflow-y:auto;min-height:0;}
+      /* 滚动条贴到面板内边缘，内容缩进仍由左右内边距维持 */
+      #${PANEL_ID} .body,#${LIVE_PANEL_ID} .list,#${RADAR_ID} .rd-list,#${RPWIN_ID} .wl{
+        margin:0 -14px;padding:0 14px;}
     `;
     document.head.appendChild(st);
+  }
+
+  /* ---------- 面板拖拽调整大小 ---------- */
+
+  const SIZE_STORE = 'qmdmb-panel-size';
+  const RESIZE_HTML = '<span class="rs" title="拖动调整面板大小"></span>';
+  const PANEL_MIN_W = 220;
+  const PANEL_MIN_H = 140;
+  /* 主面板固定高度，与样式表中的 height 共用同一个值 */
+  const PANEL_H = 750;
+  let panelSizes = {};
+
+  function sizeLoad() {
+    try {
+      const o = JSON.parse(localStorage.getItem(SIZE_STORE) || 'null');
+      if (!o || typeof o !== 'object') return;
+      Object.keys(o).forEach((k) => {
+        const v = o[k] || {};
+        const w = rpNum(v.w);
+        const h = rpNum(v.h);
+        if (w >= PANEL_MIN_W && h >= PANEL_MIN_H) panelSizes[k] = { w: w, h: h };
+      });
+    } catch (e) {}
+  }
+
+  function sizeSave() {
+    try {
+      localStorage.setItem(SIZE_STORE, JSON.stringify(panelSizes));
+    } catch (e) {}
+  }
+
+  /* 自定义高度不能超过可用视口高度 */
+  function sizeMaxH(id, lim) {
+    const s = panelSizes[id];
+    return Math.max(PANEL_MIN_H, s ? Math.min(s.h, lim) : lim);
+  }
+
+  /* 把手用事件委托，面板重绘不需要重新绑定 */
+  function onResizeDown(e) {
+    const t = e.target;
+    if (!t || !t.classList || !t.classList.contains('rs')) return;
+    const el = t.parentElement;
+    if (!el || !el.id) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const w0 = r.width;
+    const h0 = r.height;
+    const move = (ev) => {
+      /* 底边固定、左边固定：向右拖变宽，向上拖变高；宽度不能拖出视口，高度不能超过视口 */
+      const avail = Math.max(PANEL_MIN_W, Math.round(window.innerWidth - r.left - 10));
+      const w = Math.max(PANEL_MIN_W, Math.min(Math.round(w0 + ev.clientX - x0), avail));
+      const h = Math.max(PANEL_MIN_H, Math.min(Math.round(h0 - (ev.clientY - y0)), window.innerHeight - 20));
+      panelSizes[el.id] = { w: w, h: h };
+      el.style.width = w + 'px';
+      /* 主面板高度定死，副面板高度上限跟随内容 */
+      if (el.id === PANEL_ID) el.style.height = h + 'px';
+      else el.style.maxHeight = h + 'px';
+      /* 宽度变化会改变副面板的定位基准 */
+      if (document.getElementById(RADAR_ID)) syncRadarBox();
+      if (document.getElementById(RPWIN_ID)) syncWinBox();
+      if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move, true);
+      document.removeEventListener('mouseup', up, true);
+      sizeSave();
+    };
+    document.addEventListener('mousemove', move, true);
+    document.addEventListener('mouseup', up, true);
   }
 
   function tasksHtml(tasks) {
@@ -1727,9 +1884,12 @@
           stopCounters();
           closeLivePanel();
           closeWinPanel();
+          closeRadarPanel();
           p.remove();
         } else if (t.classList.contains('lb')) {
           toggleLivePanel();
+        } else if (t.classList.contains('rp-radar')) {
+          toggleRadarPanel();
         } else if (t.classList.contains('rp-go')) {
           rpJoin(Number(t.getAttribute('data-lot')));
         } else if (t.classList.contains('rp-win')) {
@@ -1743,14 +1903,20 @@
     const live = liveInfo(room.liveStatus);
     const uname = (medal && medal.target_name) || room.uname || '主播';
 
+    const sz = panelSizes[PANEL_ID];
+    if (sz) p.style.width = sz.w + 'px';
+    /* 高度固定，视口不足时由 CSS 的 max-height 收缩；拖拽过则以拖拽值为准 */
+    p.style.height = sizeMaxH(PANEL_ID, PANEL_H) + 'px';
+
     if (!medal && !tasks) {
-      p.innerHTML =
+      p.innerHTML = '<div class="body">' +
         '<div class="hd">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
         ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
         '<div class="dim">你尚未加入该主播的粉丝团。</div>' +
         (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '') +
-        rpHtml();
+        rpHtml() + '</div>' + RESIZE_HTML;
       toggleLiveBtn();
+      syncRadarBox();
       syncLiveBox();
       return;
     }
@@ -1781,7 +1947,7 @@
     }
 
     const guard = GUARDNAME[s.guard];
-    p.innerHTML =
+    p.innerHTML = '<div class="body">' +
       '<div class="hd">' + esc(name) +
         ' <span class="tag">Lv.' + (medal && medal.level != null ? medal.level : '?') + '</span>' +
         (guard ? '<span class="tag">' + guard + '</span>' : '') +
@@ -1794,8 +1960,9 @@
       journeyHtml(s.journey) +
       gainHtml(tasks, medal, s.guard, s.coins) +
       rpHtml() +
-      tasksSection;
+      tasksSection + '</div>' + RESIZE_HTML;
     toggleLiveBtn();
+    syncRadarBox();
     syncLiveBox();
   }
 
@@ -1888,7 +2055,7 @@
     q.innerHTML = '<div class="hd">所有直播间' +
       (liveRows ? '<span class="dim"> ' + liveRows.length + ' 个</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
-      '<div class="list">' + liveListHtml() + '</div>';
+      '<div class="list">' + liveListHtml() + '</div>' + RESIZE_HTML;
     syncLiveBox();
     toggleLiveBtn();
   }
@@ -1902,12 +2069,16 @@
     let right = r.right;
     const w = document.getElementById(RPWIN_ID);
     if (w) right = Math.max(right, w.getBoundingClientRect().right);
+    const d = document.getElementById(RADAR_ID);
+    if (d) right = Math.max(right, d.getBoundingClientRect().right);
     const left = Math.round(right + 10);
     q.style.left = left + 'px';
-    q.style.top = Math.round(r.top) + 'px';
-    q.style.bottom = 'auto';
+    q.style.top = 'auto';
+    q.style.bottom = '10px';
     q.style.height = 'auto';
-    q.style.maxHeight = Math.max(160, Math.round(window.innerHeight - r.top - 10)) + 'px';
+    const lim = Math.max(160, window.innerHeight - 20);
+    if (panelSizes[LIVE_PANEL_ID]) q.style.width = panelSizes[LIVE_PANEL_ID].w + 'px';
+    q.style.maxHeight = sizeMaxH(LIVE_PANEL_ID, lim) + 'px';
     q.style.maxWidth = Math.max(300, window.innerWidth - left - 16) + 'px';
     capRows(q.querySelector('.list'), LIVE_MAX);
   }
@@ -2012,6 +2183,7 @@
   function onVisibilityChange() {
     if (document.hidden) {
       stopLiveTimer();
+      stopRadarTimer();
       return;
     }
     if (document.getElementById(LIVE_PANEL_ID)) {
@@ -2019,6 +2191,7 @@
       refreshOnline();
       startLiveTimer();
     }
+    if (document.getElementById(RADAR_ID) && document.getElementById(PANEL_ID)) startRadarTimer();
   }
 
   async function toggleLivePanel() {
@@ -2068,6 +2241,707 @@
     }
   }
 
+  /* ---------- 红包雷达 ---------- */
+
+  let radarAreas = null;
+  /* 选中的分区 id 与分组 key，可多选 */
+  let radarSels = [];
+  let radarNum = 100;
+  let radarRooms = [];
+  const radarMap = new Map();
+  let radarTimer = null;
+  /* 面板打开即按下计时器，但只有启动后才发请求；计时器负责倒计时与状态行的刷新 */
+  let radarOn = false;
+  let radarLoading = false;
+  let radarFetchAt = 0;
+  /* 最近一次房间池抓取尝试的时间，失败时也推进，避免每秒重试 */
+  let radarPoolAt = 0;
+  let radarEpoch = 0;
+  let radarPauseUntil = 0;
+  let radarPauseMsg = '';
+  let radarDiag = '';
+  let radarFails = 0;
+  let radarStatCache = null;
+  let radarNewCount = 0;
+  let radarNewTimer = null;
+  /* 已结束条目数，变化时重绘一次，把「进入」换成 × */
+  let radarEndedMark = -1;
+
+  function radarPrefLoad() {
+    try {
+      const o = JSON.parse(localStorage.getItem(RADAR_STORE) || 'null');
+      if (!o || typeof o !== 'object') return;
+      /* 选中项既可能是分区 id（数字）也可能是分组 key（字符串），旧版只存单个值 */
+      const arr = Array.isArray(o.area) ? o.area : [o.area];
+      radarSels = arr
+        .map((x) => (typeof x === 'string' && radarGroupOf(x) ? x : rpNum(x)))
+        .filter((x) => !!x);
+      const n = rpNum(o.num);
+      if (RADAR_NUMS.indexOf(n) >= 0) radarNum = n;
+    } catch (e) {}
+  }
+
+  function radarPrefSave() {
+    try {
+      localStorage.setItem(RADAR_STORE, JSON.stringify({ area: radarSels, num: radarNum }));
+    } catch (e) {}
+  }
+
+  /* 多选后房间池规模由来源数量决定，冷间隔按池子实际大小分档 */
+  function radarCold() {
+    const n = radarRooms.length;
+    for (let i = 0; i < RADAR_NUMS.length; i++) {
+      if (n <= RADAR_NUMS[i]) return RADAR_COLD[RADAR_NUMS[i]];
+    }
+    return RADAR_COLD[RADAR_NUMS[RADAR_NUMS.length - 1]];
+  }
+
+  function radarTime(ts) {
+    const d = new Date(ts);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  async function fetchAreaList() {
+    try {
+      const j = await fetchJson(API_AREALIST);
+      const arr = j && rpNum(j.code) === 0 && Array.isArray(j.data) ? j.data : null;
+      if (!arr) return null;
+      const out = arr
+        .map((a) => ({ id: rpNum(a.id), name: String(a.name || '') }))
+        .filter((a) => a.id && a.name);
+      return out.length ? out : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* 房间对象字段名跨版本不一致，逐个字段取别名 */
+  function radarRoom(it) {
+    const roomid = rpNum(it.roomid || it.room_id);
+    if (!roomid) return null;
+    return {
+      roomid: roomid,
+      uid: rpNum(it.uid || it.mid),
+      uname: String(it.uname || it.name || ''),
+      title: String(it.title || ''),
+      online: rpNum(it.online || it.online_num),
+      /* 未开播与轮播的房间不扫；字段缺失时不过滤 */
+      live: it.live_status != null ? rpNum(it.live_status) : null
+    };
+  }
+
+  function radarKeep(r) {
+    if (!r) return false;
+    if (rpRoom && r.roomid === rpRoom.roomId) return false;
+    return r.live !== 0 && r.live !== 2;
+  }
+
+  async function fetchAreaRoomsPage(url, areaId, page) {
+    const q = url === API_AREAROOMS_ALT
+      ? '?platform=web&parent_area_id=' + areaId + '&area_id=0&sort_type=online&page=' + page
+      : '?platform=web&parent_area_id=' + areaId + '&cate_id=0&area_id=0&sort_type=online&page=' +
+        page + '&page_size=' + RADAR_PAGE_SIZE;
+    try {
+      const j = await fetchJson(url + q);
+      if (!j || rpNum(j.code) !== 0) return null;
+      const d = j.data;
+      if (Array.isArray(d)) return d;
+      return d && Array.isArray(d.list) ? d.list : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* 翻页收满档位数；排序参数可能失效，收满后统一按人气本地重排 */
+  async function fetchAreaRooms(areaId, num) {
+    const pages = Math.ceil(num / RADAR_PAGE_SIZE) + 1;
+    let url = API_AREAROOMS;
+    let fallback = false;
+    let got = false;
+    let list = [];
+    for (let p = 1; p <= pages; p++) {
+      const page = await fetchAreaRoomsPage(url, areaId, p);
+      /* 主端点首页无数据时换备用端点重来一次 */
+      if (url === API_AREAROOMS && !fallback && (!page || !page.length) && p === 1) {
+        url = API_AREAROOMS_ALT;
+        fallback = true;
+        p = 0;
+        continue;
+      }
+      if (!page || !page.length) break;
+      got = true;
+      list = list.concat(page);
+      if (list.length >= num) break;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    if (!got) return null;
+    const seen = new Set();
+    const out = [];
+    list.forEach((it) => {
+      const r = radarRoom(it);
+      if (!r || seen.has(r.roomid)) return;
+      seen.add(r.roomid);
+      out.push(r);
+    });
+    out.sort((a, b) => b.online - a.online);
+    /* 多来源时不能清空别的来源写下的提示 */
+    if (fallback) radarDiag = '已回退备用分区接口';
+    return out.filter(radarKeep).slice(0, num);
+  }
+
+  function radarGroupOf(sel) {
+    return RADAR_GROUPS.filter((g) => g.key === sel)[0] || null;
+  }
+
+  function vupCache() {
+    try {
+      const o = JSON.parse(localStorage.getItem(VUP_STORE) || 'null');
+      if (!o || !o.at || Date.now() - o.at > VUP_MS) return null;
+      return o.groups || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* vup 表的两种返回体：带 data 包装与直接以 uid 为键 */
+  function vupGrouped(j) {
+    const d = j && j.data && typeof j.data === 'object' ? j.data : j;
+    const groups = {};
+    RADAR_GROUPS.forEach((g) => { groups[g.key] = []; });
+    Object.keys(d || {}).forEach((uid) => {
+      const it = d[uid];
+      if (!it || !rpNum(uid)) return;
+      const g = RADAR_GROUPS.filter((x) => x.group === it.group_name)[0];
+      if (g) groups[g.key].push(rpNum(uid));
+    });
+    return groups;
+  }
+
+  async function fetchGroupUids() {
+    const hit = vupCache();
+    if (hit) return hit;
+    const urls = [API_VUP, API_VUP_ALT];
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const groups = vupGrouped(await fetchJsonOmit(urls[i]));
+        const sum = RADAR_GROUPS.reduce((n, g) => n + groups[g.key].length, 0);
+        if (!sum) continue;
+        try {
+          localStorage.setItem(VUP_STORE, JSON.stringify({ at: Date.now(), groups: groups }));
+        } catch (e) {}
+        return groups;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  /* 归属分组的房间不能按分区枚举，改用按 uid 批量取房间与开播状态 */
+  async function fetchGroupRooms(key) {
+    const groups = await fetchGroupUids();
+    if (!groups) return null;
+    const uids = groups[key] || [];
+    let out = [];
+    for (let i = 0; i < uids.length; i += VUP_CHUNK) {
+      const q = uids.slice(i, i + VUP_CHUNK).map((u) => 'uids%5B%5D=' + u).join('&');
+      const j = await fetchJson(API_UIDSTATUS + '?' + q);
+      if (!j || rpNum(j.code) !== 0) return null;
+      Object.keys(j.data || {}).forEach((k) => {
+        const r = radarRoom(j.data[k]);
+        if (r) out.push(r);
+      });
+      if (i + VUP_CHUNK < uids.length) await new Promise((r) => setTimeout(r, 120));
+    }
+    out.sort((a, b) => b.online - a.online);
+    return out.filter(radarKeep);
+  }
+
+  /* 重建房间池时保留仍存在的房间对象，避免在途请求被重复派发 */
+  function radarApplyRooms(list) {
+    const now = Date.now();
+    const old = new Map(radarRooms.map((r) => [r.roomid, r]));
+    radarRooms = list.map((r, i) => {
+      const p = old.get(r.roomid);
+      if (!p) {
+        return {
+          roomid: r.roomid, uid: r.uid, uname: r.uname, title: r.title,
+          online: r.online, live: r.live,
+          /* 首发错峰，避免开场瞬间集中请求 */
+          nextAt: now + Math.min(i * 500, 15000) + Math.floor(Math.random() * 300),
+          flight: false,
+          fail: 0
+        };
+      }
+      p.uname = r.uname || p.uname;
+      p.title = r.title || p.title;
+      p.online = r.online;
+      p.live = r.live;
+      return p;
+    });
+    radarFetchAt = now;
+  }
+
+  function radarPoolStale() {
+    return Date.now() - radarPoolAt > RADAR_LIST_MS;
+  }
+
+  /* 多个来源各自取房间后合并去重，同一个直播间只留一份 */
+  async function loadRadarRooms(epoch) {
+    radarLoading = true;
+    radarPoolAt = Date.now();
+    radarDiag = '';
+    radarStatCache = null;
+    renderRadarPanel();
+    const lists = [];
+    let bad = 0;
+    for (let i = 0; i < radarSels.length; i++) {
+      const sel = radarSels[i];
+      const one = radarGroupOf(sel) ? await fetchGroupRooms(sel) : await fetchAreaRooms(sel, radarNum);
+      if (one) lists.push(one);
+      else bad++;
+    }
+    const cur = epoch === radarEpoch;
+    radarLoading = false;
+    if (!cur) return;
+    /* 未选来源或全部失败都会得到空池 */
+    if (!lists.length) {
+      if (bad) radarDiag = '房间列表获取失败';
+      radarApplyRooms([]);
+      renderRadarPanel();
+      return;
+    }
+    if (bad) radarDiag = (radarDiag ? radarDiag + ' · ' : '') + bad + ' 个来源获取失败';
+    const seen = new Set();
+    const out = [];
+    lists.forEach((l) => l.forEach((r) => {
+      if (seen.has(r.roomid)) return;
+      seen.add(r.roomid);
+      out.push(r);
+    }));
+    out.sort((a, b) => b.online - a.online);
+    radarApplyRooms(out);
+    renderRadarPanel();
+  }
+
+  /* 换分区或档位后旧房间池作废，未启动时也要清掉，启动时才不会扫到上一批房间 */
+  function radarPoolDrop() {
+    radarRooms = [];
+    radarPoolAt = 0;
+    radarFetchAt = 0;
+    radarEpoch++;
+    radarStatCache = null;
+  }
+
+  /* 分区与分组共用一组选中项，点一次加入，再点一次移除 */
+  function toggleRadarSel(id) {
+    if (!id) return;
+    const i = radarSels.indexOf(id);
+    if (i >= 0) radarSels.splice(i, 1);
+    else radarSels.push(id);
+    radarMap.clear();
+    radarPrefSave();
+    radarPoolDrop();
+    renderRadarPanel();
+    if (radarOn) loadRadarRooms(radarEpoch);
+  }
+
+  function selectRadarNum(n) {
+    if (RADAR_NUMS.indexOf(n) < 0 || n === radarNum) return;
+    radarNum = n;
+    radarPrefSave();
+    radarPoolDrop();
+    renderRadarPanel();
+    if (radarOn) loadRadarRooms(radarEpoch);
+  }
+
+  function radarAdd(info, room) {
+    const old = radarMap.get(info.lotId);
+    if (old) {
+      let upd = false;
+      if (info.endTime && info.endTime !== old.endTime) { old.endTime = info.endTime; upd = true; }
+      if (info.awards.length && rpAwardKey(info.awards) !== rpAwardKey(old.awards)) {
+        old.awards = info.awards;
+        upd = true;
+      }
+      if (info.total && info.total !== old.total) { old.total = info.total; upd = true; }
+      if (info.need && info.need !== old.need) { old.need = info.need; upd = true; }
+      if (info.needFollow && !old.needFollow) { old.needFollow = true; upd = true; }
+      if (info.shared && !old.shared) { old.shared = true; upd = true; }
+      return upd ? 2 : 0;
+    }
+    radarMap.set(info.lotId, {
+      lotId: info.lotId,
+      rpType: info.rpType,
+      guard: !!info.guard,
+      sender: info.sender,
+      awards: info.awards,
+      endTime: info.endTime,
+      total: info.total,
+      need: info.need,
+      needFollow: !!info.needFollow,
+      shared: !!info.shared,
+      roomid: room.roomid,
+      uname: room.uname,
+      rtitle: room.title,
+      at: Date.now()
+    });
+    return 1;
+  }
+
+  function radarPrune() {
+    const now = Date.now();
+    let removed = false;
+    radarMap.forEach((row, lotId) => {
+      if (now - (row.endTime ? row.endTime * 1000 : row.at) <= RP_KEEP_MS) return;
+      radarMap.delete(lotId);
+      removed = true;
+    });
+    return removed;
+  }
+
+  function radarEndedCount() {
+    const now = nowSec();
+    let n = 0;
+    radarMap.forEach((r) => { if (r.endTime && r.endTime <= now) n++; });
+    return n;
+  }
+
+  function radarToast(n) {
+    radarNewCount += n;
+    clearTimeout(radarNewTimer);
+    toast('雷达检测到 ' + radarNewCount + ' 个新红包', true);
+    radarNewTimer = setTimeout(() => { radarNewCount = 0; }, 2000);
+  }
+
+  async function radarScan(room) {
+    const epoch = radarEpoch;
+    room.flight = true;
+    let ok = false;
+    let bad = '';
+    let list = null;
+    try {
+      const j = await fetchJson(API_RPLOTTERY + '?roomid=' + encodeURIComponent(room.roomid));
+      if (j && rpNum(j.code) === 0) {
+        ok = true;
+        list = j.data && Array.isArray(j.data.popularity_red_pocket) ? j.data.popularity_red_pocket : [];
+      } else {
+        bad = j ? String(rpNum(j.code)) : '响应异常';
+      }
+    } catch (e) {
+      bad = e.message || '网络错误';
+    }
+    room.flight = false;
+    if (epoch !== radarEpoch) return;
+    const now = Date.now();
+    if (!ok) {
+      room.fail++;
+      room.nextAt = now + (room.fail >= RADAR_FAILS ? RADAR_COOL_MS : radarCold());
+      if (++radarFails >= RADAR_FAILS) {
+        radarFails = 0;
+        radarPauseUntil = now + RADAR_COOL_MS;
+        radarPauseMsg = '停停，已触发风控';
+        /* 具体失败码留在控制台，状态行只给简短提示 */
+        if (window.console) console.warn('[qmdmb] 雷达连续失败：' + bad);
+      }
+      return;
+    }
+    room.fail = 0;
+    radarFails = 0;
+    let hot = false;
+    let changed = false;
+    let fresh = 0;
+    list.forEach((it) => {
+      const info = rpParse(it);
+      if (!info) return;
+      if (info.endTime && info.endTime <= nowSec()) return;
+      hot = true;
+      const st = radarAdd(info, room);
+      if (st) changed = true;
+      if (st === 1) fresh++;
+    });
+    room.nextAt = now + (hot ? RP_POLL_MS : radarCold());
+    if (changed) renderRadarPanel();
+    else paintRadarLefts();
+    if (fresh) radarToast(fresh);
+  }
+
+  function startRadarTimer() {
+    if (radarTimer) return;
+    radarTimer = setInterval(radarTick, 1000);
+  }
+
+  function radarStart() {
+    if (radarOn) return;
+    radarOn = true;
+    radarPauseUntil = 0;
+    radarPauseMsg = '';
+    radarFails = 0;
+    radarStatCache = null;
+    renderRadarPanel();
+    startRadarTimer();
+    if (!radarRooms.length || radarPoolStale()) loadRadarRooms(radarEpoch);
+  }
+
+  function radarStop() {
+    if (!radarOn) return;
+    radarOn = false;
+    radarPauseUntil = 0;
+    radarPauseMsg = '';
+    radarFails = 0;
+    radarStatCache = null;
+    renderRadarPanel();
+  }
+
+  function radarToggleRun() {
+    if (radarOn) radarStop();
+    else radarStart();
+  }
+
+  function stopRadarTimer() {
+    clearInterval(radarTimer);
+    radarTimer = null;
+  }
+
+  function radarTick() {
+    if (!document.getElementById(RADAR_ID) || !document.getElementById(PANEL_ID) || document.hidden) {
+      stopRadarTimer();
+      return;
+    }
+    if (radarPrune() || radarEndedCount() !== radarEndedMark) renderRadarPanel();
+    else paintRadarLefts();
+    paintRadarStat();
+    /* 未启动不发扫描请求 */
+    if (!radarOn) return;
+    const now = Date.now();
+    if (radarPauseUntil && now >= radarPauseUntil) {
+      radarPauseUntil = 0;
+      radarPauseMsg = '';
+    }
+    /* 房间池长期不重建会漏掉新开播的直播间 */
+    if (!radarLoading && radarPoolStale()) loadRadarRooms(radarEpoch);
+    if (radarPauseUntil) {
+      paintRadarStat();
+      return;
+    }
+    let n = 0;
+    radarRooms.forEach((r) => { if (r.flight) n++; });
+    if (n < RADAR_CONC) {
+      /* 当前所在直播间由主面板轮询，导航进入后立即从雷达排除 */
+      const self = rpRoom ? rpRoom.roomId : 0;
+      const due = radarRooms
+        .filter((r) => !r.flight && r.nextAt <= now && r.roomid !== self)
+        .sort((a, b) => a.nextAt - b.nextAt);
+      for (let i = 0; i < due.length && n < RADAR_CONC; i++, n++) radarScan(due[i]);
+    }
+    paintRadarStat();
+  }
+
+  function radarSelName(sel) {
+    const g = radarGroupOf(sel);
+    if (g) return g.name;
+    const a = (radarAreas || RADAR_AREAS_FALLBACK).filter((x) => x.id === sel)[0];
+    return a ? a.name : '';
+  }
+
+  function radarStatText() {
+    const parts = [];
+    const names = radarSels.map(radarSelName).filter(Boolean);
+    if (names.length) parts.push(names.join('、'));
+    if (radarLoading) parts.push('房间列表加载中…');
+    else if (radarOn) parts.push('扫描 ' + radarRooms.length + ' 个直播间');
+    else if (radarRooms.length) parts.push('已停止');
+    else parts.push('未启动');
+    if (radarMap.size) parts.push('命中 ' + radarMap.size);
+    if (radarOn && radarFetchAt) parts.push(radarTime(radarFetchAt) + ' 更新');
+    if (radarOn && radarPauseUntil > Date.now() && radarPauseMsg) parts.push(radarPauseMsg);
+    else if (radarOn && radarDiag) parts.push(radarDiag);
+    return parts.join(' · ');
+  }
+
+  function radarAreasHtml() {
+    const area = (radarAreas || RADAR_AREAS_FALLBACK).map((a) =>
+      '<span class="rd-btn rd-area' + (radarSels.indexOf(a.id) >= 0 ? ' on' : '') +
+      '" data-area="' + a.id + '">' + esc(a.name) + '</span>').join('');
+    /* 归属分组跟在分区之后，与分区共用同一组选中项 */
+    const grp = RADAR_GROUPS.map((g) =>
+      '<span class="rd-btn rd-grp' + (radarSels.indexOf(g.key) >= 0 ? ' on' : '') +
+      '" data-grp="' + g.key + '">' + g.name + '</span>').join('');
+    return area + grp;
+  }
+
+  function radarNumsHtml() {
+    /* 只选分组时人数固定，档位无意义 */
+    const onlyGrp = radarSels.length > 0 && radarSels.every((s) => !!radarGroupOf(s));
+    const nums = onlyGrp ? '' : RADAR_NUMS.map((n) =>
+      '<span class="rd-btn rd-num' + (n === radarNum ? ' on' : '') +
+      '" data-num="' + n + '">前' + n + '</span>').join('');
+    return nums + '<span class="rd-btn rd-run' + (radarOn ? ' on' : '') + '">' +
+      (radarOn ? '停止' : '启动') + '</span>';
+  }
+
+  /* 跨房间无法判断条件是否已满足，只显示条件文本 */
+  function radarCondText(row) {
+    if (row.need === 2) return '需先加入粉丝团';
+    if (row.need === 3) return '需先开通大航海';
+    if (row.need === 1 || row.needFollow) return '需先关注主播';
+    if (row.shared) return '需分享后参与';
+    return '';
+  }
+
+  function radarRowHtml(row) {
+    const anchor = row.uname || ('房间 ' + row.roomid);
+    const title = [rpTypeName(row), row.sender].filter(Boolean).join(' · ');
+    const awards = rpAwardText(row.awards, row.total);
+    const total = !row.guard && !RP_NO_TOTAL[row.rpType] && row.total
+      ? Math.round(row.total / GOLD_PER_BATTERY) : 0;
+    const cond = radarCondText(row);
+    const tail = row.endTime && row.endTime <= nowSec()
+      ? '<span class="rp-x" data-lot="' + row.lotId + '" title="已结束，点击移除">×</span>'
+      : '<a class="rp-go" href="https://live.bilibili.com/' + Number(row.roomid) +
+        '" target="_blank" rel="noopener"' + (row.rtitle ? ' title="' + esc(row.rtitle) + '"' : '') +
+        '>进入</a>';
+    return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
+      '<span class="rp-anchor">' + esc(anchor) + '</span>' +
+      (title ? '<span class="rp-title">' + esc(title) + '</span>' : '') +
+      (total > 0 ? '<span class="rp-total">总价值：' + total + '电池</span>' : '') +
+      (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
+      '</div>' + (cond ? '<span class="rp-cond">' + esc(cond) + '</span>' : '') +
+      '<span class="rp-left" data-lot="' + row.lotId + '">' + rpLeftText(row) + '</span>' +
+      tail + '</div></div>';
+  }
+
+  /* 已结束的红包由用户手动移除，避免长期占位 */
+  function radarDrop(lotId) {
+    if (!radarMap.delete(lotId)) return;
+    renderRadarPanel();
+  }
+
+  function radarListHtml() {
+    const rows = Array.from(radarMap.values()).sort((a, b) => a.endTime - b.endTime);
+    if (!rows.length) return '<div class="dim">未检测到红包</div>';
+    return rows.map(radarRowHtml).join('');
+  }
+
+  function paintRadarLefts() {
+    const q = document.getElementById(RADAR_ID);
+    if (!q) return;
+    q.querySelectorAll('.rp-left').forEach((el) => {
+      const row = radarMap.get(Number(el.getAttribute('data-lot')));
+      if (!row) return;
+      const t = rpLeftText(row);
+      if (el.textContent !== t) el.textContent = t;
+    });
+  }
+
+  function paintRadarStat() {
+    const q = document.getElementById(RADAR_ID);
+    const el = q && q.querySelector('.rd-stat');
+    if (!el) return;
+    const t = radarStatText();
+    if (t === radarStatCache) return;
+    radarStatCache = t;
+    el.textContent = t;
+  }
+
+  /* 副面板定位为单向链：主面板 → 中奖名单 → 雷达 → 所有直播间 */
+  function syncRadarBox() {
+    const q = document.getElementById(RADAR_ID);
+    const p = document.getElementById(PANEL_ID);
+    if (!q || !p) return;
+    const r = p.getBoundingClientRect();
+    let right = r.right;
+    const w = document.getElementById(RPWIN_ID);
+    if (w) right = Math.max(right, w.getBoundingClientRect().right);
+    const left = Math.round(right + 10);
+    q.style.left = left + 'px';
+    q.style.top = 'auto';
+    q.style.bottom = '10px';
+    const lim = Math.max(160, window.innerHeight - 20);
+    if (panelSizes[RADAR_ID]) q.style.width = panelSizes[RADAR_ID].w + 'px';
+    q.style.maxHeight = sizeMaxH(RADAR_ID, lim) + 'px';
+    q.style.maxWidth = Math.max(300, window.innerWidth - left - 16) + 'px';
+  }
+
+  function renderRadarPanel() {
+    let q = document.getElementById(RADAR_ID);
+    if (!q) {
+      q = document.createElement('div');
+      q.id = RADAR_ID;
+      q.addEventListener('click', (e) => {
+        const t = e.target;
+        if (!t || !t.classList) return;
+        if (t.classList.contains('x')) closeRadarPanel();
+        else if (t.classList.contains('rd-area')) toggleRadarSel(Number(t.getAttribute('data-area')));
+        else if (t.classList.contains('rd-grp')) toggleRadarSel(t.getAttribute('data-grp'));
+        else if (t.classList.contains('rd-num')) selectRadarNum(Number(t.getAttribute('data-num')));
+        else if (t.classList.contains('rd-run')) radarToggleRun();
+        else if (t.classList.contains('rp-x')) radarDrop(Number(t.getAttribute('data-lot')));
+      });
+      document.documentElement.appendChild(q);
+    }
+    radarStatCache = radarStatText();
+    q.innerHTML = '<div class="hd">红包雷达' +
+      (radarMap.size ? '<span class="dim"> ' + radarMap.size + ' 个红包</span>' : '') +
+      '<span class="x" title="关闭">×</span></div>' +
+      '<div class="rd-areas">' + radarAreasHtml() + '</div>' +
+      '<div class="rd-nums">' + radarNumsHtml() + '</div>' +
+      '<div class="rd-stat">' + esc(radarStatCache) + '</div>' +
+      '<div class="rd-list">' + radarListHtml() + '</div>' + RESIZE_HTML;
+    radarEndedMark = radarEndedCount();
+    syncRadarBox();
+    if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
+    toggleRadarBtn();
+  }
+
+  function radarBtnHtml() {
+    return '<span class="rp-radar' + (document.getElementById(RADAR_ID) ? ' on' : '') +
+      '" title="红包雷达">雷达</span>';
+  }
+
+  function toggleRadarBtn() {
+    const p = document.getElementById(PANEL_ID);
+    const btn = p && p.querySelector('.rp-radar');
+    if (btn) btn.classList.toggle('on', !!document.getElementById(RADAR_ID));
+  }
+
+  /* 面板关闭即停止扫描，重新打开后处于未启动状态 */
+  function closeRadarPanel() {
+    radarEpoch++;
+    radarEndedMark = -1;
+    radarOn = false;
+    radarPauseUntil = 0;
+    radarPauseMsg = '';
+    radarFails = 0;
+    stopRadarTimer();
+    const q = document.getElementById(RADAR_ID);
+    if (q) q.remove();
+    toggleRadarBtn();
+    syncLiveBox();
+  }
+
+  async function toggleRadarPanel() {
+    if (document.getElementById(RADAR_ID)) {
+      closeRadarPanel();
+      return;
+    }
+    if (!document.getElementById(PANEL_ID)) return;
+    radarEpoch++;
+    const epoch = radarEpoch;
+    radarStatCache = null;
+    renderRadarPanel();
+    /* 计时器只驱动界面刷新；扫描要等点「启动」 */
+    startRadarTimer();
+    if (!radarAreas) {
+      const list = await fetchAreaList();
+      if (epoch !== radarEpoch || !document.getElementById(RADAR_ID)) return;
+      radarAreas = list || RADAR_AREAS_FALLBACK;
+      /* 分区会增删，恢复出的旧 id 若已不存在就丢掉 */
+      radarSels = radarSels.filter((s) => radarGroupOf(s) || radarAreas.some((a) => a.id === s));
+      if (!radarSels.length) radarSels = [radarAreas[0].id];
+      radarPrefSave();
+      renderRadarPanel();
+    }
+  }
+
   async function open() {
     try {
       const room = await resolveRoom();
@@ -2104,6 +2978,8 @@
     if (p) {
       stopCounters();
       closeLivePanel();
+      closeWinPanel();
+      closeRadarPanel();
       p.remove();
     } else open();
   }
@@ -2240,6 +3116,7 @@
     }
     setInterval(() => {
       refreshBtnVisibility();
+      syncRadarBox();
       syncLiveBox();
     }, 1000);
   }
@@ -2247,8 +3124,11 @@
   installWsHook();
   loadGifts();
   loadRp();
+  radarPrefLoad();
+  sizeLoad();
   loadUid();
   document.addEventListener('visibilitychange', onVisibilityChange);
+  document.addEventListener('mousedown', onResizeDown, true);
 
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
