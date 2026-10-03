@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.2
+// @version      1.8.3
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -85,6 +85,11 @@
   /* 单房间连续失败转冷间隔的阈值；全局连续失败达到 RADAR_PAUSE_FAILS 才暂停扫描 */
   const RADAR_FAILS = 3;
   const RADAR_PAUSE_FAILS = 10;
+  /* 所有房间共用一个令牌桶，抑制同一时刻集中到期造成的请求尖峰：平均 1 个令牌 / 300ms，最多积压 4 个 */
+  const RADAR_BUCKET_MS = 300;
+  const RADAR_BUCKET_MAX = 4;
+  /* -352 为实测风控码；-412 是 B 站风控拦截的常用返回码，雷达里未实测到 */
+  const RADAR_RISK_CODES = [-352, -412];
   /* 归属分组：成员 uid 取自 vup-json 的 group_name，房间与开播状态由批量接口补齐 */
   const RADAR_GROUPS = [
     { key: 'vr', name: 'VR', group: 'VirtuaReal' },
@@ -2288,10 +2293,14 @@
   /* 最近一次房间池抓取尝试的时间，失败时也推进，避免每秒重试 */
   let radarPoolAt = 0;
   let radarEpoch = 0;
-  let radarPauseUntil = 0;
-  let radarPauseMsg = '';
+  /* 连续失败只提示，不中断扫描；下一次成功即清除 */
+  let radarFailMsg = '';
   let radarDiag = '';
   let radarFails = 0;
+  /* 非风控类失败单独计数，避免网络抖动也弹出「请刷新网页过验证」 */
+  let radarErrFails = 0;
+  let radarTokenAt = 0;
+  let radarTokens = RADAR_BUCKET_MAX;
   let radarStatCache = null;
   let radarNewCount = 0;
   let radarNewTimer = null;
@@ -2333,6 +2342,22 @@
   /* 固定节拍会让整批房间同时到期，间隔统一加 ±15% 抖动 */
   function radarJitter(ms) {
     return Math.round(ms * (0.85 + Math.random() * 0.3));
+  }
+
+  /* 冷间隔与全局暂停用更宽的 ±30% 抖动，避免恢复后仍按固定秒级节拍成批复发 */
+  function radarCoolJitter(ms) {
+    return Math.round(ms * (0.7 + Math.random() * 0.6));
+  }
+
+  /* 所有房间共用的令牌桶，取出一个令牌才允许发一次扫描请求 */
+  function radarTokenTake() {
+    const now = Date.now();
+    if (!radarTokenAt) radarTokenAt = now;
+    radarTokens = Math.min(RADAR_BUCKET_MAX, radarTokens + (now - radarTokenAt) / RADAR_BUCKET_MS);
+    radarTokenAt = now;
+    if (radarTokens < 1) return false;
+    radarTokens -= 1;
+    return true;
   }
 
   function radarTime(ts) {
@@ -2677,11 +2702,15 @@
     const now = Date.now();
     if (!ok) {
       room.fail++;
-      room.nextAt = now + radarJitter(room.fail >= RADAR_FAILS ? RADAR_COOL_MS : radarCold());
-      if (++radarFails >= RADAR_PAUSE_FAILS) {
-        radarFails = 0;
-        radarPauseUntil = now + RADAR_COOL_MS;
-        radarPauseMsg = '请刷新网页过验证';
+      room.nextAt = now + radarCoolJitter(room.fail >= RADAR_FAILS ? RADAR_COOL_MS : radarCold());
+      /* 风控码与其他失败分开计数，只有风控码才提示过验证 */
+      const risk = RADAR_RISK_CODES.indexOf(rpNum(bad)) >= 0;
+      const fails = risk ? ++radarFails : ++radarErrFails;
+      if (fails >= RADAR_PAUSE_FAILS) {
+        if (risk) radarFails = 0;
+        else radarErrFails = 0;
+        /* 达阈值只提示并清零计数，扫描继续；降速交由各房间的冷间隔处理 */
+        radarFailMsg = risk ? '请刷新网页过验证' : '扫描异常';
         /* 具体失败码留在控制台，状态行只给简短提示 */
         if (window.console) console.warn('[qmdmb] 雷达连续失败：' + bad);
       }
@@ -2689,6 +2718,8 @@
     }
     room.fail = 0;
     radarFails = 0;
+    radarErrFails = 0;
+    radarFailMsg = '';
     let hot = false;
     let changed = false;
     let fresh = 0;
@@ -2718,9 +2749,11 @@
   function radarStart() {
     if (radarOn) return;
     radarOn = true;
-    radarPauseUntil = 0;
-    radarPauseMsg = '';
+    radarFailMsg = '';
     radarFails = 0;
+    radarErrFails = 0;
+    radarTokenAt = 0;
+    radarTokens = RADAR_BUCKET_MAX;
     radarStatCache = null;
     renderRadarPanel();
     startRadarTimer();
@@ -2730,9 +2763,9 @@
   function radarStop() {
     if (!radarOn) return;
     radarOn = false;
-    radarPauseUntil = 0;
-    radarPauseMsg = '';
+    radarFailMsg = '';
     radarFails = 0;
+    radarErrFails = 0;
     radarStatCache = null;
     renderRadarPanel();
   }
@@ -2758,16 +2791,8 @@
     /* 未启动不发扫描请求 */
     if (!radarOn) return;
     const now = Date.now();
-    if (radarPauseUntil && now >= radarPauseUntil) {
-      radarPauseUntil = 0;
-      radarPauseMsg = '';
-    }
     /* 房间池长期不重建会漏掉新开播的直播间 */
     if (!radarLoading && radarPoolStale()) loadRadarRooms(radarEpoch);
-    if (radarPauseUntil) {
-      paintRadarStat();
-      return;
-    }
     let n = 0;
     radarRooms.forEach((r) => { if (r.flight) n++; });
     if (n < RADAR_CONC) {
@@ -2776,7 +2801,12 @@
       const due = radarRooms
         .filter((r) => !r.flight && r.nextAt <= now && r.roomid !== self)
         .sort((a, b) => a.nextAt - b.nextAt);
-      for (let i = 0; i < due.length && n < RADAR_CONC; i++, n++) radarScan(due[i]);
+      for (let i = 0; i < due.length && n < RADAR_CONC; i++) {
+        /* 令牌用完说明本次节拍的额度已打满，剩下的留到下一拍 */
+        if (!radarTokenTake()) break;
+        radarScan(due[i]);
+        n++;
+      }
     }
     if (now - radarOnlineAt > LIVE_ONLINE_MS) radarRefreshOnline();
     paintRadarStat();
@@ -2799,9 +2829,8 @@
     else parts.push('未启动');
     if (radarMap.size) parts.push('命中 ' + radarMap.size);
     if (radarOn && radarFetchAt) parts.push(radarTime(radarFetchAt) + ' 更新');
-    if (radarOn && radarPauseUntil > Date.now() && radarPauseMsg) {
-      parts.push(radarPauseMsg + ' ' + Math.ceil((radarPauseUntil - Date.now()) / 1000) + 's');
-    } else if (radarOn && radarDiag) parts.push(radarDiag);
+    if (radarOn && radarFailMsg) parts.push(radarFailMsg);
+    if (radarOn && radarDiag) parts.push(radarDiag);
     return parts.join(' · ');
   }
 
@@ -2995,9 +3024,9 @@
     radarEpoch++;
     radarEndedMark = -1;
     radarOn = false;
-    radarPauseUntil = 0;
-    radarPauseMsg = '';
+    radarFailMsg = '';
     radarFails = 0;
+    radarErrFails = 0;
     stopRadarTimer();
     const q = document.getElementById(RADAR_ID);
     if (q) q.remove();
