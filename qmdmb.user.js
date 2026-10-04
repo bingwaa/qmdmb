@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.4
+// @version      1.8.5
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1812,6 +1812,14 @@
     return watchServerSec + Math.floor(watchLiveMs / 1000);
   }
 
+  /* 服务端按心跳计量，粒度粗、常落后于本地累计，直接覆盖会让总观时回退；
+     因此校准只前进不后退：服务端值更大才采纳，否则保留本地累计 */
+  function syncWatchSec(sec, cur) {
+    if (sec == null) return;
+    watchServerSec = cur != null && cur > sec ? cur : sec;
+    watchLiveMs = 0;
+  }
+
   function watchText(sec) {
     return '总观时：' + (sec / 3600).toFixed(2) + '小时(' + sec + '秒)';
   }
@@ -1843,10 +1851,12 @@
   }
 
   function startCounters(info, uid) {
+    /* 同一主播才沿用上一轮累计，换直播间时旧值作废 */
+    const prev = uid && uid === countUid ? watchSec() : null;
     stopCounters();
     if (info) {
       if (info.sec != null) {
-        watchServerSec = info.sec;
+        syncWatchSec(info.sec, prev);
         watchLastAt = Date.now();
       }
       barCount = info.bar;
@@ -1865,10 +1875,7 @@
     if (!countUid || !document.getElementById(PANEL_ID)) return;
     const info = await fetchGuardActive(countUid);
     if (!info) return;
-    if (info.sec != null) {
-      watchServerSec = info.sec;
-      watchLiveMs = 0;
-    }
+    syncWatchSec(info.sec, watchSec());
     if (info.bar != null) barCount = info.bar;
     paintCounters();
   }
