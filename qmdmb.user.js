@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.3
+// @version      1.8.4
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -173,8 +173,16 @@
     return (document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)')) || [])[1] || '';
   }
 
+  /* 手动刷新期间置真：绕开浏览器缓存，避免拿回上一次的响应 */
+  let noCache = false;
+
   async function fetchJson(url) {
-    const r = await fetch(url, { credentials: 'include' });
+    const init = { credentials: 'include' };
+    if (noCache) {
+      init.cache = 'no-store';
+      url += (url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now();
+    }
+    const r = await fetch(url, init);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }
@@ -550,9 +558,13 @@
     return GIFT_STORE + GIFT_REV + '-' + getRoomId() + '-' + dayStamp();
   }
 
+  /* 每一行带记录当天的日期。进程跨天后内存与当天存储键里都可能混着昨天的行，
+     载入与合并都按日期过滤，旧行直接丢弃，不带日期的历史行同样不采纳 */
   function loadGifts() {
     const room = getRoomId();
     const key = giftKey();
+    const today = dayStamp();
+    feedLightSeen = false;
     try {
       if (room) {
         const prefix = GIFT_STORE + GIFT_REV + '-' + room + '-';
@@ -565,20 +577,39 @@
       if (!Array.isArray(arr)) return;
       giftRows.length = 0;
       arr.forEach((g) => {
-        if (g && g.name) {
+        if (g && g.name && g.day === today) {
           giftRows.push({
             name: String(g.name),
             num: Number(g.num) || 0,
             battery: Number(g.battery) || 0,
-            extra: Number(g.extra) || 0
+            extra: Number(g.extra) || 0,
+            day: today
           });
         }
       });
     } catch (e) {}
   }
 
+  /* 丢弃内存里不属于今天的行，跨天后第一次合并礼物前调用 */
+  function dropStaleGifts() {
+    const today = dayStamp();
+    for (let i = giftRows.length - 1; i >= 0; i--) {
+      if (giftRows[i].day !== today) {
+        giftRows.splice(i, 1);
+        feedLightSeen = false;
+      }
+    }
+  }
+
   function saveGifts() {
     try { localStorage.setItem(giftKey(), JSON.stringify(giftRows)); } catch (e) {}
+  }
+
+  /* 手动刷新时回落到当天数据：明细按当天过滤重载，红包参与记录同样按天重载 */
+  function resetDaily() {
+    loadGifts();
+    rpDone = new Set();
+    loadRp();
   }
 
   function feedTaskDone() {
@@ -606,12 +637,14 @@
       found.battery += g.battery;
       found.extra = (found.extra || 0) + extra;
     } else {
-      giftRows.push({ name: g.name, num: g.num, battery: g.battery, extra: extra });
+      giftRows.push({ name: g.name, num: g.num, battery: g.battery, extra: extra, day: dayStamp() });
     }
   }
 
   /* 一条广播可含多个礼物（盲盒批量开出），合并后统一落盘与重绘 */
   function pushGifts(list) {
+    /* 跨天后先丢掉昨天的行，否则会被一并写进当天的键，刷新也清不掉 */
+    dropStaleGifts();
     list.forEach(mergeGift);
     saveGifts();
     rerender();
@@ -1499,11 +1532,18 @@
         color:#9a9a9a;cursor:pointer;font-size:15px;font-weight:400;border-radius:4px;}
       ${P('.x:hover')}{color:#fff;background:rgba(255,255,255,.14);}
       /* 标题行按钮统一为粉色描边，与红包行的按钮一致 */
-      ${P('.lb')}{position:absolute;right:24px;top:1px;box-sizing:border-box;height:16px;line-height:14px;
+      ${P('.lb')}{position:absolute;right:48px;top:1px;box-sizing:border-box;height:16px;line-height:14px;
         padding:0 5px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         cursor:pointer;font-size:12px;font-weight:400;}
       ${P('.lb.on')}{background:rgba(251,114,153,.18);}
       ${P('.lb:hover')}{background:#fb7299;color:#fff;}
+      /* 手动刷新：占据 牌 与 × 之间，固定宽度保证与 .lb 的间距稳定 */
+      ${P('.rf')}{position:absolute;right:24px;top:1px;box-sizing:border-box;width:20px;height:16px;
+        line-height:14px;text-align:center;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
+        cursor:pointer;font-size:12px;font-weight:400;}
+      ${P('.rf:hover')}{background:#fb7299;color:#fff;}
+      ${P('.rf.on')}{opacity:.45;cursor:default;}
+      #${PANEL_ID} .hd{padding-right:80px;}
       ${P('.tag')}{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         padding:1px 6px;margin-left:8px;vertical-align:middle;}
       ${P('.dim')}{color:#9a9a9a;font-size:12px;}
@@ -1924,6 +1964,8 @@
           p.remove();
         } else if (t.classList.contains('lb')) {
           toggleLivePanel();
+        } else if (t.classList.contains('rf')) {
+          refreshPanel();
         } else if (t.classList.contains('rp-radar')) {
           toggleRadarPanel();
         } else if (t.classList.contains('rp-go')) {
@@ -1947,7 +1989,7 @@
     if (!medal && !tasks) {
       p.innerHTML = '<div class="body">' +
         '<div class="hd">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
-        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + refreshBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
         '<div class="dim">你尚未加入该主播的粉丝团。</div>' +
         (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '') +
         rpHtml() + '</div>' + RESIZE_HTML;
@@ -1987,7 +2029,7 @@
       '<div class="hd">' + esc(name) +
         ' <span class="tag">Lv.' + (medal && medal.level != null ? medal.level : '?') + '</span>' +
         (guard ? '<span class="tag">' + guard + '</span>' : '') +
-        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + refreshBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
       medalRows +
       storeRow +
       watchHtml() +
@@ -2070,6 +2112,10 @@
   function liveBtnHtml() {
     const on = document.getElementById(LIVE_PANEL_ID) ? ' on' : '';
     return '<span class="lb' + on + '" title="所有直播间">牌</span>';
+  }
+
+  function refreshBtnHtml() {
+    return '<span class="rf" title="重新拉取数据">↻</span>';
   }
 
   function toggleLiveBtn() {
@@ -3058,6 +3104,29 @@
     }
   }
 
+  let refreshing = false;
+
+  /* 手动刷新：先按当天重建本地累计，再绕开缓存整体重拉服务端数据 */
+  async function refreshPanel() {
+    if (refreshing || !document.getElementById(PANEL_ID)) return;
+    refreshing = true;
+    const btn = document.querySelector('#' + PANEL_ID + ' .rf');
+    if (btn) btn.classList.add('on');
+    resetDaily();
+    noCache = true;
+    let ok = false;
+    try {
+      ok = await open();
+    } finally {
+      noCache = false;
+      refreshing = false;
+      const b = document.querySelector('#' + PANEL_ID + ' .rf');
+      if (b) b.classList.remove('on');
+    }
+    /* open 失败时自己已经弹过原因，这里不再覆盖 */
+    if (ok) toast('已刷新', true);
+  }
+
   async function open() {
     try {
       const room = await resolveRoom();
@@ -3082,8 +3151,10 @@
         guard: t.ok ? t.guard : 0,
         coins: coins
       });
+      return true;
     } catch (e) {
       toast('打开失败：' + e.message, false);
+      return false;
     }
   }
 
