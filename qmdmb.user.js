@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.6
+// @version      1.8.7
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -863,7 +863,10 @@
   function rpWinRowHtml(w) {
     const me = myUid();
     const self = me && String(w.uid) === String(me);
-    return '<span class="wn' + (self ? ' self' : '') + '">' + esc(w.name || ('uid ' + w.uid)) + '</span>' +
+    const uid = String(w.uid);
+    return '<a class="wn' + (self ? ' self' : '') + '" href="https://space.bilibili.com/' +
+      encodeURIComponent(uid) + '" target="_blank" rel="noopener" title="UID：' + esc(uid) + '">' +
+      esc(w.name || ('uid ' + w.uid)) + '</a>' +
       '<span class="wp">' + esc(w.award || '') + '</span>' +
       '<span class="wc">' + (w.num > 1 || (w.num > 0 && String(w.award || '').indexOf('电池') >= 0) ? '×' + w.num : '') + '</span>';
   }
@@ -1625,7 +1628,9 @@
         grid-template-columns:max-content max-content max-content;column-gap:10px;row-gap:6px;
         align-items:center;align-content:start;justify-content:start;}
       #${RPWIN_ID} .wl .dim{grid-column:1 / -1;}
-      #${RPWIN_ID} .wn{color:#e6e6e6;overflow:hidden;text-overflow:ellipsis;max-width:150px;}
+      #${RPWIN_ID} .wn{color:#e6e6e6;overflow:hidden;text-overflow:ellipsis;max-width:150px;
+        text-decoration:none;cursor:pointer;}
+      #${RPWIN_ID} .wn:hover{text-decoration:underline;}
       #${RPWIN_ID} .wn.self{color:#ffd97a;font-weight:600;}
       #${RPWIN_ID} .wp{color:#9a9a9a;}
       #${RPWIN_ID} .wc{color:#9a9a9a;justify-self:end;}
