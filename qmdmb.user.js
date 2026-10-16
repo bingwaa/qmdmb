@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.7
+// @version      1.8.8
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -65,6 +65,9 @@
   const RP_POLL_MS = 5000;
   const RP_KEEP_MS = 10 * 60 * 1000;
   const RP_REL_MS = 60 * 1000;
+  /* 自动参与：检出后等待 RP_AUTO_MS 再发请求，相邻请求之间间隔 RP_AUTO_GAP */
+  const RP_AUTO_MS = 5000;
+  const RP_AUTO_GAP = 500;
   const RPWIN_ID = 'qmdmb-fanpanel-rpwin';
   const RP_WIN_TRIES = 6;
   const RP_WIN_MAX = 30;
@@ -674,6 +677,9 @@
   let rpFollowAt = 0;
   let rpFollowLoad = null;
   let rpWinLot = 0;
+  /* 自动参与开关，随面板关闭复位；所有自动请求串成一条链 */
+  let rpAuto = false;
+  let rpAutoChain = Promise.resolve();
 
   function nowSec() {
     return Math.floor(Date.now() / 1000);
@@ -989,7 +995,7 @@
   function rpHtml() {
     const rows = Array.from(rpMap.values()).sort((a, b) => a.endTime - b.endTime);
     const body = rows.length ? rows.map(rpRowHtml).join('') : '<div class="dim">未检测到红包</div>';
-    return '<div class="rp"><div class="tt">红包' + radarBtnHtml() + '</div>' + body + '</div>';
+    return '<div class="rp"><div class="tt">红包' + autoBtnHtml() + radarBtnHtml() + '</div>' + body + '</div>';
   }
 
   function paintRedPackets() {
@@ -1034,7 +1040,11 @@
         arr.forEach((it) => {
           const info = rpParse(it);
           if (!info) return;
-          if (rpAdd(info)) changed = true;
+          const st = rpAdd(info);
+          if (st) {
+            changed = true;
+            if (st === 1) rpAutoArm(rpMap.get(info.lotId));
+          }
           const row = rpMap.get(info.lotId);
           if (row && rpNum(it.user_status) === 1 && row.status !== 'done') {
             row.status = 'done';
@@ -1215,6 +1225,72 @@
     rerender();
   }
 
+  /* ---------- 自动参与 ---------- */
+
+  /* 是否交给自动流程：开关打开、尚未参与、未结束，且参与条件不是明确未满足 */
+  function rpAutoReady(row) {
+    if (!rpAuto || !row || row.status !== 'idle') return false;
+    if (row.endTime && row.endTime <= nowSec()) return false;
+    return !rpCondBlock(row);
+  }
+
+  /* 前一个请求完成后再隔 RP_AUTO_GAP 才发下一个，避免同一时刻集中触发风控 */
+  function rpAutoPush(lotId) {
+    rpAutoChain = rpAutoChain.then(async () => {
+      if (!rpAuto) return;
+      const row = rpMap.get(lotId);
+      if (rpAutoReady(row)) await rpJoin(lotId);
+      await new Promise((r) => setTimeout(r, RP_AUTO_GAP));
+    }).catch(() => {});
+  }
+
+  /* 每个红包只在首次检出时排一次队；关掉开关即取消未到时的排队 */
+  function rpAutoArm(row) {
+    if (!rpAutoReady(row) || row.autoTimer) return;
+    row.autoTimer = setTimeout(() => {
+      row.autoTimer = null;
+      rpAutoPush(row.lotId);
+    }, RP_AUTO_MS);
+  }
+
+  function rpAutoCancel() {
+    rpMap.forEach((row) => {
+      clearTimeout(row.autoTimer);
+      row.autoTimer = null;
+    });
+  }
+
+  /* 由关切到开：主面板现存的红包不再等待，按结束时间先后依次参与 */
+  function rpAutoAll() {
+    Array.from(rpMap.values())
+      .filter((r) => rpAutoReady(r))
+      .sort((a, b) => a.endTime - b.endTime)
+      .forEach((r) => rpAutoPush(r.lotId));
+  }
+
+  /* 立即改按钮外观，不等面板重绘 */
+  function toggleAutoBtn() {
+    const p = document.getElementById(PANEL_ID);
+    const btn = p && p.querySelector('.rp-auto');
+    if (!btn) return;
+    btn.classList.toggle('on', rpAuto);
+    btn.innerHTML = autoBtnInner();
+  }
+
+  function setAuto(on) {
+    if (on === rpAuto) return;
+    rpAuto = on;
+    if (on) rpAutoAll();
+    else rpAutoCancel();
+    toggleAutoBtn();
+  }
+
+  /* 面板关闭即回到关，重新打开后不自动参与 */
+  function autoStop() {
+    rpAuto = false;
+    rpAutoCancel();
+  }
+
   /* ---------- WebSocket 抓包 ---------- */
 
   function onMessages(text) {
@@ -1231,7 +1307,12 @@
         const rp = rpParse(m.data || {});
         const st = rpAdd(rp);
         if (st) {
-          if (st === 1) toast('检测到' + rpTypeName(rp) + '，可在面板参与', true);
+          if (st === 1) {
+            const fresh = rpMap.get(rp.lotId);
+            toast('检测到' + rpTypeName(rp) +
+              (rpAutoReady(fresh) ? '，5 秒后自动参与' : '，可在面板参与'), true);
+            rpAutoArm(fresh);
+          }
           rerender();
         }
       }
@@ -1582,7 +1663,7 @@
       ${P('.g-sum')}{margin-top:7px;font-size:12px;color:#9a9a9a;}
       ${P('.g-sum b')}{color:#ffd97a;font-size:14px;}
       ${P('.rp')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      ${P('.rp .tt')}{position:relative;padding-right:44px;color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.rp .tt')}{position:relative;padding-right:84px;color:#fb7299;font-weight:600;margin-bottom:6px;}
       ${P('.rp-item')}{margin:5px 0;}
       /* 雷达每个条目（含第一个）上方都用与主面板各栏一致的分隔线 */
       #${RADAR_ID} .rd-list .rp-item{border-top:1px dashed rgba(255,255,255,.16);
@@ -1635,11 +1716,19 @@
       #${RPWIN_ID} .wp{color:#9a9a9a;}
       #${RPWIN_ID} .wc{color:#9a9a9a;justify-self:end;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
-      ${P('.rp-radar')}{position:absolute;right:0;top:0;box-sizing:border-box;height:16px;line-height:14px;
-        padding:0 5px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
+      /* 自动在左、雷达在右，两者固定同宽，内容居中；自动开启时内容换成转动动画 */
+      ${P('.rp-auto')},${P('.rp-radar')}{position:absolute;top:0;box-sizing:border-box;width:36px;height:16px;
+        display:flex;align-items:center;justify-content:center;
+        color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         cursor:pointer;font-size:12px;font-weight:400;}
-      ${P('.rp-radar.on')}{background:rgba(251,114,153,.18);}
-      ${P('.rp-radar:hover')}{background:#fb7299;color:#fff;}
+      ${P('.rp-radar')}{right:0;}
+      ${P('.rp-auto')}{right:40px;}
+      ${P('.rp-auto.on')},${P('.rp-radar.on')}{background:rgba(251,114,153,.18);}
+      ${P('.rp-auto:hover')},${P('.rp-radar:hover')}{background:#fb7299;color:#fff;}
+      /* 动画元素不接收点击，否则点在圆环上时事件目标是它，按钮的委托判断不到 .rp-auto */
+      ${P('.rp-spin')}{width:9px;height:9px;border:2px solid currentColor;border-top-color:transparent;
+        border-radius:50%;animation:qmdmb-rp-spin .7s linear infinite;pointer-events:none;}
+      @keyframes qmdmb-rp-spin{to{transform:rotate(360deg)}}
       #${RADAR_ID}{display:flex;flex-direction:column;box-sizing:border-box;width:330px;}
       #${RADAR_ID} .rd-areas{display:flex;flex-wrap:wrap;gap:4px 6px;margin-bottom:6px;}
       #${RADAR_ID} .rd-nums{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;}
@@ -1971,6 +2060,7 @@
         if (!t || !t.classList) return;
         if (t.classList.contains('x')) {
           stopCounters();
+          autoStop();
           closeLivePanel();
           closeWinPanel();
           closeRadarPanel();
@@ -1979,6 +2069,8 @@
           toggleLivePanel();
         } else if (t.classList.contains('rf')) {
           refreshPanel();
+        } else if (t.classList.contains('rp-auto')) {
+          setAuto(!rpAuto);
         } else if (t.classList.contains('rp-radar')) {
           toggleRadarPanel();
         } else if (t.classList.contains('rp-go')) {
@@ -3067,6 +3159,16 @@
     toggleRadarBtn();
   }
 
+  /* 开时按钮内容是转动动画，关时是文字；两者共用固定宽度 */
+  function autoBtnInner() {
+    return rpAuto ? '<i class="rp-spin"></i>' : '自动';
+  }
+
+  function autoBtnHtml() {
+    return '<span class="rp-auto' + (rpAuto ? ' on' : '') +
+      '" title="自动模式">' + autoBtnInner() + '</span>';
+  }
+
   function radarBtnHtml() {
     return '<span class="rp-radar' + (document.getElementById(RADAR_ID) ? ' on' : '') +
       '" title="红包雷达">雷达</span>';
@@ -3177,6 +3279,7 @@
     const p = document.getElementById(PANEL_ID);
     if (p) {
       stopCounters();
+      autoStop();
       closeLivePanel();
       closeWinPanel();
       closeRadarPanel();
