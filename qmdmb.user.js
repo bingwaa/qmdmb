@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.8
+// @version      1.8.9
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -94,17 +94,22 @@
   const RADAR_BUCKET_MAX = 4;
   /* -352 为实测风控码；-412 是 B 站风控拦截的常用返回码，雷达里未实测到 */
   const RADAR_RISK_CODES = [-352, -412];
-  /* 归属分组：成员 uid 取自 vup-json 的 group_name，房间与开播状态由批量接口补齐 */
+  /* 归属分组：成员 uid 取自分组数据源，房间与开播状态由批量接口补齐；groups 为各源的等价组名 */
   const RADAR_GROUPS = [
-    { key: 'vr', name: 'VR', group: 'VirtuaReal' },
-    { key: 'psp', name: 'PSP', group: 'P-SP' }
+    { key: 'vr', name: 'VR', groups: ['VirtuaReal'] },
+    { key: 'psp', name: 'PSP', groups: ['P-SP', 'PSP'] }
   ];
-  const API_VUP = 'https://api.ukamnads.icu/api/v2/vup-list';
+  /* 分组数据源，按尝试顺序排列：vup-json 的两个镜像体积小、最快；vdb 是 vtbs.moe 的数据库；ukamnads 是常返回截断响应的代理 */
+  const API_VUP_FAST = 'https://vup-json.vrp.moe/vup-slim.json';
   const API_VUP_ALT = 'https://vup-json.laplace.live/vup-slim.json';
+  const API_VDB = 'https://vdb.vtbs.moe/json/list.json';
+  const API_VUP = 'https://api.ukamnads.icu/api/v2/vup-list';
   const API_UIDSTATUS = 'https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids';
   const VUP_STORE = 'qmdmb-vup';
   const VUP_MS = 12 * 60 * 60 * 1000;
   const VUP_CHUNK = 100;
+  /* 各数据源尚未收录的成员，按分组键手工补入；奈奈莉娅于 2026-10-16 加入 PSP，上游未更新 */
+  const RADAR_GROUP_PATCH = { psp: [489146840] };
   /* 分区列表接口失败时的兜底父分区 */
   const RADAR_AREAS_FALLBACK = [
     { id: 1, name: '娱乐' }, { id: 2, name: '网游' }, { id: 3, name: '手游' },
@@ -2618,34 +2623,105 @@
     }
   }
 
+  function radarGroupByName(name) {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key) return null;
+    return RADAR_GROUPS.filter((g) => g.groups.some((n) => n.toLowerCase() === key))[0] || null;
+  }
+
+  function radarGroupBuckets() {
+    const groups = {};
+    RADAR_GROUPS.forEach((g) => { groups[g.key] = []; });
+    return groups;
+  }
+
   /* vup 表的两种返回体：带 data 包装与直接以 uid 为键 */
   function vupGrouped(j) {
     const d = j && j.data && typeof j.data === 'object' ? j.data : j;
-    const groups = {};
-    RADAR_GROUPS.forEach((g) => { groups[g.key] = []; });
+    const groups = radarGroupBuckets();
     Object.keys(d || {}).forEach((uid) => {
       const it = d[uid];
       if (!it || !rpNum(uid)) return;
-      const g = RADAR_GROUPS.filter((x) => x.group === it.group_name)[0];
+      const g = radarGroupByName(it.group_name);
       if (g) groups[g.key].push(rpNum(uid));
     });
     return groups;
   }
 
+  /* vdb 返回体：分组是独立条目，成员用 group 字段指向分组的 uuid */
+  function vdbGrouped(j) {
+    const list = j && Array.isArray(j.vtbs) ? j.vtbs : null;
+    if (!list) return null;
+    const keyed = {};
+    list.forEach((it) => {
+      if (!it || it.type !== 'group' || !it.uuid) return;
+      const n = it.name || {};
+      const cands = [n.cn, n.en, n.jp];
+      for (let i = 0; i < cands.length; i++) {
+        const g = radarGroupByName(cands[i]);
+        if (g) { keyed[it.uuid] = g.key; break; }
+      }
+    });
+    const groups = radarGroupBuckets();
+    list.forEach((it) => {
+      /* 分组条目自身也带 group 字段，指向自己，不算成员 */
+      if (!it || !it.group || it.group === it.uuid) return;
+      const k = keyed[it.group];
+      if (!k) return;
+      const acc = Array.isArray(it.accounts) ? it.accounts : [];
+      acc.forEach((a) => {
+        if (!a || a.platform !== 'bilibili' || a.type !== 'official') return;
+        const uid = rpNum(a.id);
+        if (uid) groups[k].push(uid);
+      });
+    });
+    return groups;
+  }
+
+  function vupStore(groups, src) {
+    try {
+      localStorage.setItem(VUP_STORE, JSON.stringify({ at: Date.now(), groups: groups }));
+    } catch (e) {}
+    if (src > 0) radarDiag = '已回退备用分组接口';
+    return groups;
+  }
+
+  /* 手工名单并入取数结果；缓存存的是原始名单，补入项每次返回时重新合并 */
+  function radarPatch(groups) {
+    Object.keys(RADAR_GROUP_PATCH).forEach((k) => {
+      if (!groups[k]) return;
+      RADAR_GROUP_PATCH[k].forEach((u) => {
+        if (groups[k].indexOf(u) < 0) groups[k].push(u);
+      });
+    });
+    return groups;
+  }
+
+  /* 逐个源尝试；缺组的源先留存，只有所有组都有成员才认定该源可用 */
   async function fetchGroupUids() {
     const hit = vupCache();
-    if (hit) return hit;
-    const urls = [API_VUP, API_VUP_ALT];
+    if (hit) return radarPatch(hit);
+    const urls = [API_VUP_FAST, API_VUP_ALT, API_VDB, API_VUP];
+    const parse = [vupGrouped, vupGrouped, vdbGrouped, vupGrouped];
+    let part = null;
     for (let i = 0; i < urls.length; i++) {
+      let groups = null;
       try {
-        const groups = vupGrouped(await fetchJsonOmit(urls[i]));
-        const sum = RADAR_GROUPS.reduce((n, g) => n + groups[g.key].length, 0);
-        if (!sum) continue;
-        try {
-          localStorage.setItem(VUP_STORE, JSON.stringify({ at: Date.now(), groups: groups }));
-        } catch (e) {}
-        return groups;
+        groups = parse[i](await fetchJsonOmit(urls[i]));
       } catch (e) {}
+      if (!groups) continue;
+      const counts = RADAR_GROUPS.map((g) => groups[g.key].length);
+      if (!counts.some((n) => n > 0)) continue;
+      if (!counts.every((n) => n > 0)) {
+        if (!part) part = { groups: groups, src: i };
+        continue;
+      }
+      vupStore(groups, i);
+      return radarPatch(groups);
+    }
+    if (part) {
+      vupStore(part.groups, part.src);
+      return radarPatch(part.groups);
     }
     return null;
   }
