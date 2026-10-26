@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.8.9
+// @version      1.9.0
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -674,6 +674,8 @@
   const RP_NO_TOTAL = { 3: 1, 4: 1, 5: 1 };
 
   const rpMap = new Map();
+  /* 主面板手动移除的已结束红包，轮询与弹幕不再重新加入 */
+  const rpDropped = new Set();
   let rpDone = new Set();
   let rpRoom = null;
   let rpPollTimer = null;
@@ -748,7 +750,7 @@
 
   /* 返回值：0 无变化、1 新增、2 已有红包的奖品信息更新 */
   function rpAdd(info) {
-    if (!info) return 0;
+    if (!info || rpDropped.has(info.lotId)) return 0;
     const old = rpMap.get(info.lotId);
     if (old) {
       const upd = (info.awards.length && rpAwardKey(info.awards) !== rpAwardKey(old.awards)) ||
@@ -969,7 +971,8 @@
     let tail;
     if (ended) {
       tail = '<span class="rp-win" data-lot="' + row.lotId + '">' +
-        (row.winLoading ? '查询中' : '名单') + '</span>';
+        (row.winLoading ? '查询中' : '名单') + '</span>' +
+        '<span class="rp-x" data-lot="' + row.lotId + '" title="已结束，点击移除">×</span>';
       if (row.status === 'fail') {
         tail += '<span class="rp-tag bad" title="' + esc(row.result) + '">失败</span>';
       }
@@ -1023,6 +1026,15 @@
       }
     });
     if (flip) rerender();
+  }
+
+  /* 已结束的红包由用户手动移除，与雷达一致；记住 lotId 避免轮询重新加回 */
+  function rpDrop(lotId) {
+    if (!lotId) return;
+    rpDropped.add(lotId);
+    if (!rpMap.delete(lotId)) return;
+    if (rpWinLot === lotId) closeWinPanel();
+    rerender();
   }
 
   /* 已结束且未参与的红包保留一段时间后清理，避免面板无限增长 */
@@ -2082,6 +2094,8 @@
           rpJoin(Number(t.getAttribute('data-lot')));
         } else if (t.classList.contains('rp-win')) {
           rpWinners(Number(t.getAttribute('data-lot')));
+        } else if (t.classList.contains('rp-x')) {
+          rpDrop(Number(t.getAttribute('data-lot')));
         }
       });
       document.documentElement.appendChild(p);
