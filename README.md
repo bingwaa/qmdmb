@@ -6,21 +6,9 @@
 
 ## 效果
 
-使用前:
-
-<img src="images/eff5.png" width="200">
-
-<img src="images/eff3.png" width="200">
-
-<img src="images/eff0.png" width="200">
-
-使用后:
-
-<img src="images/eff4.png" width="200">
-
-<img src="images/eff2.png" width="200">
-
-<img src="images/eff1.png" width="200">
+| 使用前 | 使用后 |
+| ------ | ------ |
+| <img src="images/eff5.webp" width="240"><br><img src="images/eff3.webp" width="240"><br><img src="images/eff0.webp" width="240"> | <img src="images/eff4.webp" width="240"><br><img src="images/eff2.webp" width="240"><br><img src="images/eff1.webp" width="240"> |
 
 ## 安装
 
