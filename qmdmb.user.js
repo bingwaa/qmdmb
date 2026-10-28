@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.0
+// @version      1.9.1
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -72,6 +72,8 @@
   const RP_WIN_TRIES = 6;
   const RP_WIN_MAX = 30;
   const LIVE_MAX = 20;
+  /* GetMyMedals 的 page_size 上限为 10，页数按 total_page 遍历，此值仅防异常数据死循环 */
+  const MEDAL_PAGE_MAX = 100;
 
   const RADAR_ID = 'qmdmb-fanpanel-radar';
   const API_AREALIST = 'https://api.live.bilibili.com/room/v1/Area/getList';
@@ -235,29 +237,39 @@
     return { liveStatus, uname };
   }
 
+  /* 与 fetchAllMedals 同一分页上限；命中即返回，未命中则遍历完 total_page */
   async function getMyMedal(uid) {
-    for (let page = 1; page <= 10; page++) {
+    let totalPage = 1;
+    for (let page = 1; page <= MEDAL_PAGE_MAX; page++) {
       const j = await fetchJson(API_MYMEDS + '?page=' + page + '&page_size=10');
       if (j.code !== 0) return null;
-      const items = (j.data && (j.data.items || j.data.list)) || [];
+      const d = j.data || {};
+      const items = d.items || d.list || [];
       const m = items.find((x) => String(x.target_id) === String(uid));
       if (m) return m;
-      const totalPage = (j.data && j.data.page_info && j.data.page_info.total_page) || 1;
+      if (d.page_info && d.page_info.total_page) totalPage = d.page_info.total_page;
       if (page >= totalPage || items.length === 0) break;
     }
     return null;
   }
 
-  /* 分页遍历最多 10 页（page_size 上限 10），取全部持有粉丝牌 */
+  /* 按 total_page 遍历全部页（page_size 上限 10），取全部持有粉丝牌；分页期间数据变动可能导致跨页重复，按 target_id 去重 */
   async function fetchAllMedals() {
     const out = [];
-    for (let page = 1; page <= 10; page++) {
+    const seen = new Set();
+    let totalPage = 1;
+    for (let page = 1; page <= MEDAL_PAGE_MAX; page++) {
       const j = await fetchJson(API_MYMEDS + '?page=' + page + '&page_size=10');
       if (j.code !== 0) break;
       const d = j.data || {};
       const items = d.items || d.list || [];
-      items.forEach((x) => out.push(x));
-      const totalPage = (d.page_info && d.page_info.total_page) || 1;
+      items.forEach((x) => {
+        const k = String(x.target_id);
+        if (seen.has(k)) return;
+        seen.add(k);
+        out.push(x);
+      });
+      if (d.page_info && d.page_info.total_page) totalPage = d.page_info.total_page;
       if (page >= totalPage || items.length === 0) break;
     }
     return out;
@@ -894,17 +906,17 @@
     return '<div class="dim">中奖 ' + list.length + ' 人</div>' + list.map(rpWinRowHtml).join('');
   }
 
+  /* 行位置用 offsetTop 计算，与 max-height 无关；不先清空 max-height，避免容器瞬时变高把 scrollTop 夹回，只在结果变化时写入 */
   function capRows(list, n) {
     if (!list) return;
-    list.style.maxHeight = '';
     const kids = Array.prototype.filter.call(list.children, (el) => !el.classList.contains('dim'));
     const tops = [];
     for (let i = 0; i < kids.length; i++) {
       const t = kids[i].offsetTop;
       if (!tops.length || t > tops[tops.length - 1] + 1) tops.push(t);
     }
-    if (tops.length <= n) return;
-    list.style.maxHeight = (tops[n] - tops[0]) + 'px';
+    const v = tops.length > n ? (tops[n] - tops[0]) + 'px' : '';
+    if (list.style.maxHeight !== v) list.style.maxHeight = v;
   }
 
   function closeWinPanel() {
@@ -1758,9 +1770,9 @@
       #${RADAR_ID} .rd-stat{font-size:12px;color:#9a9a9a;margin-bottom:6px;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       #${RADAR_ID} .rd-list{flex:1 1 auto;overflow-y:auto;min-height:0;}
-      /* 滚动条贴到面板内边缘，内容缩进仍由左右内边距维持 */
+      /* 滚动条贴到面板内边缘，内容缩进仍由左右内边距维持；滚到端点不向页面传递滚动 */
       #${PANEL_ID} .body,#${LIVE_PANEL_ID} .list,#${RADAR_ID} .rd-list,#${RPWIN_ID} .wl{
-        margin:0 -14px;padding:0 14px;}
+        margin:0 -14px;padding:0 14px;overscroll-behavior:contain;}
     `;
     document.head.appendChild(st);
   }
