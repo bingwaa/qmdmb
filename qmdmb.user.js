@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.1
+// @version      1.9.2
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1773,6 +1773,25 @@
       /* 滚动条贴到面板内边缘，内容缩进仍由左右内边距维持；滚到端点不向页面传递滚动 */
       #${PANEL_ID} .body,#${LIVE_PANEL_ID} .list,#${RADAR_ID} .rd-list,#${RPWIN_ID} .wl{
         margin:0 -14px;padding:0 14px;overscroll-behavior:contain;}
+      /* 三段各一个元素：入口、站内左段（粉丝团心形）、站内右段（大航海）。
+         入口复制站内左段的切片素材，左端圆头与右缘斜缝都由该素材承担；
+         站内左段去掉左端切片成为中段。选择器以入口节点与相邻关系为条件，
+         不依赖胶囊上的类与内联样式 */
+      #${BTN_ID}{display:inline-flex;align-items:center;justify-content:center;
+        font-size:13px;line-height:1;cursor:pointer;user-select:none;}
+      #${BTN_ID}.qmdmb-entry-seg{flex:0 0 auto;height:22px;padding:0;border:0;box-sizing:border-box;}
+      /* 中段去掉左端切片成为平直边，再按同一角度斜切，与入口右缘构成等宽斜缝。
+         5px / 22px 与站内右段左缘的斜率一致；左移 3px 抵消斜切吃掉的可见宽度 */
+      #${BTN_ID}.qmdmb-entry-seg ~ .left-part{box-sizing:border-box!important;min-width:0!important;
+        flex:0 0 auto!important;margin-left:-3px!important;
+        border-image-slice:0 15% 0 21% fill!important;
+        border-image-width:0 7px 0 0!important;
+        -webkit-clip-path:polygon(5px 0,100% 0,100% 100%,0 100%);
+        clip-path:polygon(5px 0,100% 0,100% 100%,0 100%);}
+      #${BTN_ID}.qmdmb-entry-seg ~ .right-part{box-sizing:border-box!important;flex:0 0 auto!important;}
+      /* 无粉丝团胶囊可用时（未加入粉丝团等）独立成枚 */
+      #${BTN_ID}.qmdmb-entry-solo{height:22px;padding:0 9px;border-radius:11px;
+        background:#f69;color:#fff;margin-right:8px;}
     `;
     document.head.appendChild(st);
   }
@@ -3410,39 +3429,143 @@
     return follow ? { el: follow, after: true } : null;
   }
 
-  function makeEntry(src) {
-    const btn = src.cloneNode(true);
+  /* 入口只保留一个图标，外观由所在位置决定：胶囊内为一段，独立时为一枚胶囊 */
+  function makeEntry() {
+    const btn = document.createElement('span');
     btn.id = BTN_ID;
     btn.title = '粉丝团任务';
-    btn.removeAttribute('data-curbutton');
-    btn.removeAttribute('data-curbuttonstrategy');
-    const hint = btn.querySelector('.follow-key-prompt');
-    if (hint) hint.remove();
-    const text = btn.querySelector('.follow-info-prompt');
-    if (text) {
-      text.textContent = '任务';
-    } else {
-      const right = btn.querySelector('.right-part');
-      if (right) right.remove();
-      const left = btn.querySelector('.left-part');
-      if (left) {
-        left.innerHTML = '';
-        left.appendChild(document.createTextNode('任务'));
-      } else {
-        btn.textContent = '任务';
-      }
-    }
-    btn.style.setProperty('width', 'auto', 'important');
-    btn.style.setProperty('min-width', '0', 'important');
-    btn.style.setProperty('flex', '0 0 auto', 'important');
-    btn.style.setProperty('cursor', 'pointer', 'important');
-    btn.style.setProperty('user-select', 'none', 'important');
-    btn.querySelectorAll('.followed, .left-part').forEach((el) => {
-      el.style.setProperty('width', 'auto', 'important');
-      el.style.setProperty('min-width', '0', 'important');
-      el.style.setProperty('flex', '0 0 auto', 'important');
+    btn.textContent = '🎯';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      togglePanel();
     });
     return btn;
+  }
+
+  /* 只写与现值不同的声明，避免重复写入触发站内的变动观察 */
+  function iput(el, k, v) {
+    const s = el.style;
+    if (s.getPropertyValue(k) !== v || s.getPropertyPriority(k) !== 'important') {
+      s.setProperty(k, v, 'important');
+    }
+  }
+
+  /* 三段等宽与中段斜边直接写成内联样式：不依赖胶囊上的类，也不依赖节点顺序 */
+  function applyUnit(btn, part, right, u) {
+    const w = u + 'px';
+    const cut = 'polygon(5px 0,100% 0,100% 100%,0 100%)';
+    iput(btn, 'display', 'inline-flex');
+    iput(btn, 'align-items', 'center');
+    iput(btn, 'justify-content', 'center');
+    iput(btn, 'box-sizing', 'border-box');
+    iput(btn, 'height', '22px');
+    iput(btn, 'width', w);
+    if (part) {
+      iput(part, 'box-sizing', 'border-box');
+      /* 左移 3px 再补 3px 宽：斜切吃掉的中段可见宽度与左侧斜缝宽度同时补回，
+         右缘位置不变，右段不受影响 */
+      iput(part, 'width', (u + 3) + 'px');
+      iput(part, 'margin-left', '-3px');
+      iput(part, 'min-width', '0');
+      iput(part, 'flex', '0 0 auto');
+      /* 左端切片保留 21%，前端宽度设为 0：切片不绘制，填充区也就不含左端圆弧 */
+      iput(part, 'border-image-slice', '0 15% 0 21% fill');
+      iput(part, 'border-image-width', '0 7px 0 0');
+      iput(part, '-webkit-clip-path', cut);
+      iput(part, 'clip-path', cut);
+    }
+    if (right) {
+      iput(right, 'box-sizing', 'border-box');
+      iput(right, 'width', w);
+      iput(right, 'flex', '0 0 auto');
+    }
+  }
+
+  /* 量右段（大航海）的自然宽度：先摘掉自己写入的宽度再读 */
+  function naturalWidth(el) {
+    const s = el.style;
+    const keep = s.getPropertyValue('width');
+    if (keep) s.removeProperty('width');
+    const w = Math.round(el.getBoundingClientRect().width);
+    if (keep) s.setProperty('width', keep, 'important');
+    return w;
+  }
+
+  /* 以右段自然宽度为一段宽；右段尚未渲染时先按站内下限占位，待其出现后重算 */
+  function fitSegment(target, btn, remeasure) {
+    const part = target.el.querySelector('.followed .left-part');
+    const right = target.el.querySelector('.followed .right-part');
+    if (remeasure) {
+      const w = right ? naturalWidth(right) : 0;
+      if (w >= 44) btn._u = w;
+    }
+    applyUnit(btn, part, right, btn._u || 56);
+  }
+
+  function segOverflow(target) {
+    const right = target.el.querySelector('.followed .right-part');
+    return !right || right.scrollWidth > right.clientWidth + 1;
+  }
+
+  /* 入口的左端圆头沿用站内左段的切片素材。站内切到深色时
+     `.follow-ctnr.enable-dark` 会换成另一份素材，按计算结果跟随；
+     站内无素材时退回圆角底色 */
+  function copyCap(btn, part) {
+    const cs = getComputedStyle(part);
+    const src = cs.borderImageSource;
+    if (btn._capOk && btn._capSrc === src) return;
+    btn._capSrc = src;
+    btn.style.removeProperty('background');
+    btn.style.removeProperty('border-radius');
+    if (!src || src === 'none') {
+      /* 站内样式表可能晚于入口加载，此时先占位，素材可用后补取 */
+      const cap = part.closest('.follow-ctnr');
+      const dark = !!(cap && cap.classList.contains('enable-dark'));
+      btn._capOk = false;
+      btn.style.setProperty('background', dark ? 'rgba(193,88,122,.5)' : '#fdeef2');
+      btn.style.setProperty('border-radius', '11px 0 0 11px');
+      return;
+    }
+    btn._capOk = true;
+    /* 切片值取站内左段的原值；中段的切片已被改写，不能从它读回 */
+    btn.style.setProperty('border-image-source', src);
+    btn.style.setProperty('border-image-slice', '0 15% 0 21% fill');
+    btn.style.setProperty('border-image-width', '0 7px 0 10px');
+    btn.style.setProperty('border-image-repeat', cs.borderImageRepeat || 'stretch');
+  }
+
+  function clearCap(btn) {
+    btn._capOk = false;
+    btn._capSrc = '';
+    ['border-image-source', 'border-image-slice', 'border-image-width',
+      'border-image-repeat', 'background', 'border-radius'].forEach((k) => {
+      btn.style.removeProperty(k);
+    });
+  }
+
+  /* 已加入粉丝团时插在胶囊左段之前，成为最左一段；否则退回独立胶囊。
+     等分与分隔由以入口节点为条件的样式规则承担，站内重绘替换节点时依然生效 */
+  function mountEntry(btn, target, part) {
+    if (part) {
+      btn._cap = target.el;
+      btn._mode = 'seg';
+      btn._u = 0;
+      btn.className = 'qmdmb-entry-seg';
+      btn.style.removeProperty('margin-right');
+      copyCap(btn, part);
+      part.before(btn);
+      fitSegment(target, btn, true);
+      return;
+    }
+    btn._cap = target.el;
+    btn._mode = 'solo';
+    btn._u = 0;
+    clearCap(btn);
+    btn.className = 'qmdmb-entry-solo';
+    if (target.after) target.el.after(btn);
+    else target.el.before(btn);
+    tighten(btn, target.el);
   }
 
   function tighten(entry, cap) {
@@ -3460,23 +3583,30 @@
     const old = document.getElementById(BTN_ID);
     if (old) {
       if (!target) return;
-      if (old._cap === target.el) {
-        tighten(old, target.el);
+      /* 站内重绘会连胶囊内节点一起重建，断开后需要重新挂载；胶囊晚于入口出现时形态也会变 */
+      const part = target.el.querySelector('.followed .left-part');
+      const mode = part ? 'seg' : 'solo';
+      if (old._cap === target.el && old.isConnected && old._mode === mode) {
+        if (mode === 'seg') {
+          /* 入口须紧邻左段之前，相邻选择器才会命中：站内调整顺序时重新插入 */
+          if (old.nextElementSibling !== part) mountEntry(old, target, part);
+          else {
+            /* 素材变化（深色切换）时同步，未变化时函数内直接返回 */
+            copyCap(old, part);
+            /* 右段晚于入口渲染、或其后内容变宽（头衔载入）时重算段宽；
+               站内改写中段的内联样式时由同一次调用补回 */
+            fitSegment(target, old, !old._u || segOverflow(target));
+          }
+        }
         return;
       }
       old.remove();
     }
     if (!target) return;
-    const btn = makeEntry(pick(FOLLOW_SEL) || target.el);
+    const part = target.el.querySelector('.followed .left-part');
+    const btn = makeEntry();
     btn._cap = target.el;
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      togglePanel();
-    });
-    if (target.after) target.el.after(btn);
-    else target.el.before(btn);
-    tighten(btn, target.el);
+    mountEntry(btn, target, part);
   }
 
   /* ---------- 可见性 ---------- */
@@ -3505,6 +3635,8 @@
 
   function init() {
     if (!document.body) return;
+    /* 样式表原先只在首次打开面板时注入，入口在渲染后的一段时间里没有规则可依 */
+    ensureStyle();
     injectButton();
     refreshBtnVisibility();
   }
