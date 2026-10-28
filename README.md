@@ -4,6 +4,24 @@
 - 适用于在未开播直播间查看亲密度任务完成情况
 - 适用于拧巴观众取关了主播但还想刷牌子亲密度
 
+## 效果
+
+使用前:
+
+<img src="images/eff5.png" width="200">
+
+<img src="images/eff3.png" width="200">
+
+<img src="images/eff0.png" width="200">
+
+使用后:
+
+<img src="images/eff4.png" width="200">
+
+<img src="images/eff2.png" width="200">
+
+<img src="images/eff1.png" width="200">
+
 ## 安装
 
 需要先安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [Violentmonkey](https://violentmonkey.github.io/)。
