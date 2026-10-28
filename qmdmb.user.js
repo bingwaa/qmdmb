@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.2
+// @version      1.9.3
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -31,7 +31,6 @@
   const BEAT_ID = 'qmdmb-fanpanel-beat';
   const RESYNC_TICKS = 30;
   const TOAST_ID = 'qmdmb-fanpanel-toast';
-  /* 未加入粉丝团为 unJoinFansClub，已加入为 joinFansClub */
   const ENTRY_SEL = '.follow-ctnr[data-curbutton="joinFansClub"], .follow-ctnr[data-curbutton="unJoinFansClub"]';
   const FOLLOW_SEL = '.follow-ctnr[data-curbutton="unFollow"]';
   const OFFLINE_SEL = '.status-tag';
@@ -65,43 +64,34 @@
   const RP_POLL_MS = 5000;
   const RP_KEEP_MS = 10 * 60 * 1000;
   const RP_REL_MS = 60 * 1000;
-  /* 自动参与：检出后等待 RP_AUTO_MS 再发请求，相邻请求之间间隔 RP_AUTO_GAP */
   const RP_AUTO_MS = 5000;
   const RP_AUTO_GAP = 500;
   const RPWIN_ID = 'qmdmb-fanpanel-rpwin';
   const RP_WIN_TRIES = 6;
   const RP_WIN_MAX = 30;
   const LIVE_MAX = 20;
-  /* GetMyMedals 的 page_size 上限为 10，页数按 total_page 遍历，此值仅防异常数据死循环 */
   const MEDAL_PAGE_MAX = 100;
 
   const RADAR_ID = 'qmdmb-fanpanel-radar';
   const API_AREALIST = 'https://api.live.bilibili.com/room/v1/Area/getList';
-  /* 主端点实测无需签名可用（page_size 实测 50、80 均生效），备用端点分页 20 条但可能要求签名 */
   const API_AREAROOMS = 'https://api.live.bilibili.com/room/v1/Area/getRoomList';
   const API_AREAROOMS_ALT = 'https://api.live.bilibili.com/xlive/web-interface/v1/second/getList';
   const RADAR_STORE = 'qmdmb-radar';
   const RADAR_NUMS = [100, 200, 300, 400, 500];
-  /* 命中红包的房间按 5s 快轮询，冷房间按档位放慢 */
   const RADAR_COLD = { 100: 45000, 200: 90000, 300: 120000, 400: 150000, 500: 180000 };
   const RADAR_CONC = 2;
   const RADAR_PAGE_SIZE = 80;
   const RADAR_LIST_MS = 5 * 60 * 1000;
   const RADAR_COOL_MS = 60 * 1000;
-  /* 单房间连续失败转冷间隔的阈值；全局连续失败达到 RADAR_PAUSE_FAILS 才暂停扫描 */
   const RADAR_FAILS = 3;
   const RADAR_PAUSE_FAILS = 10;
-  /* 所有房间共用一个令牌桶，抑制同一时刻集中到期造成的请求尖峰：平均 1 个令牌 / 300ms，最多积压 4 个 */
   const RADAR_BUCKET_MS = 300;
   const RADAR_BUCKET_MAX = 4;
-  /* -352 为实测风控码；-412 是 B 站风控拦截的常用返回码，雷达里未实测到 */
   const RADAR_RISK_CODES = [-352, -412];
-  /* 归属分组：成员 uid 取自分组数据源，房间与开播状态由批量接口补齐；groups 为各源的等价组名 */
   const RADAR_GROUPS = [
     { key: 'vr', name: 'VR', groups: ['VirtuaReal'] },
     { key: 'psp', name: 'PSP', groups: ['P-SP', 'PSP'] }
   ];
-  /* 分组数据源，按尝试顺序排列：vup-json 的两个镜像体积小、最快；vdb 是 vtbs.moe 的数据库；ukamnads 是常返回截断响应的代理 */
   const API_VUP_FAST = 'https://vup-json.vrp.moe/vup-slim.json';
   const API_VUP_ALT = 'https://vup-json.laplace.live/vup-slim.json';
   const API_VDB = 'https://vdb.vtbs.moe/json/list.json';
@@ -110,9 +100,7 @@
   const VUP_STORE = 'qmdmb-vup';
   const VUP_MS = 12 * 60 * 60 * 1000;
   const VUP_CHUNK = 100;
-  /* 各数据源尚未收录的成员，按分组键手工补入；奈奈莉娅于 2026-10-16 加入 PSP，上游未更新 */
   const RADAR_GROUP_PATCH = { psp: [489146840] };
-  /* 分区列表接口失败时的兜底父分区 */
   const RADAR_AREAS_FALLBACK = [
     { id: 1, name: '娱乐' }, { id: 2, name: '网游' }, { id: 3, name: '手游' },
     { id: 4, name: '绘画' }, { id: 5, name: '电台' }, { id: 6, name: '单机游戏' },
@@ -184,7 +172,6 @@
     return (document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)')) || [])[1] || '';
   }
 
-  /* 手动刷新期间置真：绕开浏览器缓存，避免拿回上一次的响应 */
   let noCache = false;
 
   async function fetchJson(url) {
@@ -198,14 +185,12 @@
     return r.json();
   }
 
-  /* 站外接口允许任意来源但不允许带凭据，带 cookie 会被 CORS 拒绝 */
   async function fetchJsonOmit(url) {
     const r = await fetch(url, { credentials: 'omit' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   }
 
-  /* ---------- 房间与亲密度数据 ---------- */
 
   async function resolveRoom() {
     const ini = initialState();
@@ -237,7 +222,6 @@
     return { liveStatus, uname };
   }
 
-  /* 与 fetchAllMedals 同一分页上限；命中即返回，未命中则遍历完 total_page */
   async function getMyMedal(uid) {
     let totalPage = 1;
     for (let page = 1; page <= MEDAL_PAGE_MAX; page++) {
@@ -253,7 +237,6 @@
     return null;
   }
 
-  /* 按 total_page 遍历全部页（page_size 上限 10），取全部持有粉丝牌；分页期间数据变动可能导致跨页重复，按 target_id 去重 */
   async function fetchAllMedals() {
     const out = [];
     const seen = new Set();
@@ -275,7 +258,6 @@
     return out;
   }
 
-  /* 批量查询主播直播状态，data 以 uid 为键 */
   async function fetchRoomStatus(uids) {
     const map = {};
     for (let i = 0; i < uids.length; i += 50) {
@@ -289,7 +271,6 @@
     return map;
   }
 
-  /* 单房间真实在线人数（在线榜 onlineNum），未开播为 0，失败返回 null */
   async function fetchOnlineNum(roomid, uid) {
     if (!roomid || !uid) return null;
     try {
@@ -351,7 +332,6 @@
     return Math.floor((Number(j.data) || 0) / COIN_EXP_PER_COIN);
   }
 
-  /* ---------- 当前用户 uid ---------- */
 
   let myUidCache = 0;
 
@@ -372,7 +352,6 @@
     } catch (e) {}
   }
 
-  /* ---------- 二进制工具 ---------- */
 
   function viewOf(d) {
     if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
@@ -402,9 +381,7 @@
     return u8;
   }
 
-  /* ---------- protobuf 扫描 ---------- */
 
-  /* 按出现顺序返回全部字段，同一字段号可重复（gift_list） */
   function pbScan(b, start, end) {
     const out = [];
     let i = start;
@@ -440,7 +417,6 @@
     return new TextDecoder().decode(b.subarray(f.s, f.e));
   }
 
-  /* SendGiftBroadcast：gift_list 为重复字段，盲盒批量开出时每项各自计价 */
   function pbGifts(b64) {
     let buf;
     try { buf = b64ToU8(b64); } catch (e) { return []; }
@@ -469,7 +445,6 @@
     });
   }
 
-  /* total_coin 在连击时累加，不与 num 相乘；优先用单价 × 数量 */
   function giftCoin(d, num) {
     const price = Number(d.price) || 0;
     const coin = price > 0 ? price * num : Number(d.total_coin) || 0;
@@ -488,9 +463,7 @@
     return [];
   }
 
-  /* ---------- 礼物累计与存储 ---------- */
 
-  /* SUPER_CHAT_MESSAGE 与 _JPN 同时下发同一 id，去重后只计一次 */
   const SC_SEEN_MAX = 50;
   const scSeen = [];
 
@@ -509,7 +482,6 @@
     };
   }
 
-  /* 同一笔大航海会下发 GUARD_BUY、USER_TOAST_MSG 与 SEND_GIFT，按 用户+等级+金额 指纹去重 */
   const GUARD_DEDUP_MS = 15000;
   const guardSeen = [];
 
@@ -523,7 +495,6 @@
     return false;
   }
 
-  /* price 为金瓜子时不低于 13.8 万，为元时为 138 / 1998 / 19998 */
   function guardGold(d) {
     const price = Number(d.price) || 0;
     if (!price) return 0;
@@ -549,7 +520,6 @@
     return guardRow(d.uid, level, gold);
   }
 
-  /* pb 通道若已给出大航海电池数，则直接换算，避免与 GUARD_BUY 重复计入 */
   function guardGiftOf(g) {
     const level = GUARDLEVEL[g.name];
     if (!level) return g;
@@ -579,8 +549,6 @@
     return GIFT_STORE + GIFT_REV + '-' + getRoomId() + '-' + dayStamp();
   }
 
-  /* 每一行带记录当天的日期。进程跨天后内存与当天存储键里都可能混着昨天的行，
-     载入与合并都按日期过滤，旧行直接丢弃，不带日期的历史行同样不采纳 */
   function loadGifts() {
     const room = getRoomId();
     const key = giftKey();
@@ -611,7 +579,6 @@
     } catch (e) {}
   }
 
-  /* 丢弃内存里不属于今天的行，跨天后第一次合并礼物前调用 */
   function dropStaleGifts() {
     const today = dayStamp();
     for (let i = giftRows.length - 1; i >= 0; i--) {
@@ -626,7 +593,6 @@
     try { localStorage.setItem(giftKey(), JSON.stringify(giftRows)); } catch (e) {}
   }
 
-  /* 手动刷新时回落到当天数据：明细按当天过滤重载，红包参与记录同样按天重载 */
   function resetDaily() {
     loadGifts();
     rpDone = new Set();
@@ -643,14 +609,12 @@
   function mergeGift(g) {
     if (g.name === LIGHT_GIFT) {
       if (!feedLightSeen && !feedTaskDone()) {
-        /* 首个灯牌记为点亮任务，批量投喂的其余个数仍按 +1 计入 */
         feedLightSeen = true;
         g.num -= 1;
         if (g.num <= 0) return;
       }
       g.battery = g.num;
     }
-    /* 亲密之旅礼物在电池收益之外额外增加 150 亲密度 */
     const extra = g.name === JOURNEY_GIFT ? JOURNEY_EXTRA * g.num : 0;
     const found = giftRows.find((x) => x.name === g.name);
     if (found) {
@@ -662,18 +626,14 @@
     }
   }
 
-  /* 一条广播可含多个礼物（盲盒批量开出），合并后统一落盘与重绘 */
   function pushGifts(list) {
-    /* 跨天后先丢掉昨天的行，否则会被一并写进当天的键，刷新也清不掉 */
     dropStaleGifts();
     list.forEach(mergeGift);
     saveGifts();
     rerender();
   }
 
-  /* ---------- 直播间红包 ---------- */
 
-  /* 红包开始的弹幕命令，新旧版本并存 */
   const RP_CMDS = {
     POPULARITY_RED_POCKET_V2_START: 1,
     POPULARITY_RED_POCKET_START: 1,
@@ -682,11 +642,9 @@
     RED_POCKET_START: 1
   };
   const RPTYPE = { 1: '人气红包', 3: '电池红包', 4: '亲密红包', 5: '电池红包' };
-  /* 奖品非礼物的红包类型：3/5 电池红包、4 亲密红包；大航海红包由 rp_guard_info 标记 */
   const RP_NO_TOTAL = { 3: 1, 4: 1, 5: 1 };
 
   const rpMap = new Map();
-  /* 主面板手动移除的已结束红包，轮询与弹幕不再重新加入 */
   const rpDropped = new Set();
   let rpDone = new Set();
   let rpRoom = null;
@@ -696,7 +654,6 @@
   let rpFollowAt = 0;
   let rpFollowLoad = null;
   let rpWinLot = 0;
-  /* 自动参与开关，随面板关闭复位；所有自动请求串成一条链 */
   let rpAuto = false;
   let rpAutoChain = Promise.resolve();
 
@@ -736,7 +693,6 @@
     return { name: name, num: rpNum(a.num || a.gift_num) || 1 };
   }
 
-  /* 字段跨版本新旧并存（lot_id/id、sender_name/sender_uinfo.base.name、end_time/endTime），两种形态都取 */
   function rpParse(d) {
     if (!d || typeof d !== 'object') return null;
     const lotId = rpNum(d.lot_id || d.id);
@@ -749,10 +705,8 @@
       sender: String(d.sender_name || base.name || ''),
       awards: awards,
       endTime: rpNum(d.end_time || d.endTime),
-      /* 红包池总额，单位为金瓜子；电池红包用它换算池内电池总数 */
       total: rpNum(d.total_price || d.totalPrice),
       guard: !!d.rp_guard_info,
-      /* 参与条件：1需关注 2需粉丝团 3需大航海，receive_type 1 需分享 */
       need: rpNum(d.join_requirement || d.joinRequirement),
       needFollow: !!(d.need_follow || d.needFollow),
       shared: rpNum(d.receive_type || d.receiveType) === 1,
@@ -760,7 +714,6 @@
     };
   }
 
-  /* 返回值：0 无变化、1 新增、2 已有红包的奖品信息更新 */
   function rpAdd(info) {
     if (!info || rpDropped.has(info.lotId)) return 0;
     const old = rpMap.get(info.lotId);
@@ -801,9 +754,7 @@
     return 1;
   }
 
-  /* ---------- 红包参与条件 ---------- */
 
-  /* 关注状态以 relation 接口为准，带缓存与在途去重 */
   async function rpLoadFollow(force) {
     const uid = rpRoom && rpRoom.uid;
     if (!uid) return false;
@@ -823,7 +774,6 @@
     } catch (e) {}
     if (!Number.isFinite(attr)) return false;
     rpFollowAt = Date.now();
-    /* attribute: 2 已关注，6 互关 */
     const follow = attr === 2 || attr === 6;
     if (follow === rpFollow) return false;
     rpFollow = follow;
@@ -836,7 +786,6 @@
     return null;
   }
 
-  /* tip 为条件未满足时给用户的提示 */
   function rpCond(row) {
     const args = renderArgs || {};
     if (row.need === 2) {
@@ -852,7 +801,6 @@
     return null;
   }
 
-  /* 条件明确未满足时不发请求，避免服务端替用户完成关注等操作 */
   function rpCondBlock(row) {
     const c = rpCond(row);
     return c && c.met === false ? c.tip : null;
@@ -874,7 +822,6 @@
     return list.map((a) => a.name + '×' + a.num).join('、');
   }
 
-  /* 电池类奖品的名字是「电池红包」、num 是份数，池内电池总数由 total（金瓜子）换算 */
   function rpAwardText(list, total) {
     const battery = total ? Math.round(total / GOLD_PER_BATTERY) : 0;
     return list.map((a) => {
@@ -883,7 +830,6 @@
     }).join('、');
   }
 
-  /* ---------- 中奖名单侧栏 ---------- */
 
   function rpWinRowHtml(w) {
     const me = myUid();
@@ -906,7 +852,6 @@
     return '<div class="dim">中奖 ' + list.length + ' 人</div>' + list.map(rpWinRowHtml).join('');
   }
 
-  /* 行位置用 offsetTop 计算，与 max-height 无关；不先清空 max-height，避免容器瞬时变高把 scrollTop 夹回，只在结果变化时写入 */
   function capRows(list, n) {
     if (!list) return;
     const kids = Array.prototype.filter.call(list.children, (el) => !el.classList.contains('dim'));
@@ -940,7 +885,6 @@
     q.style.maxHeight = sizeMaxH(RPWIN_ID, lim) + 'px';
   }
 
-  /* 名单条目可能来自主面板，也可能来自雷达，两处共用同一个侧栏 */
   function rpRowAny(lotId) {
     return rpMap.get(lotId) || null;
   }
@@ -976,7 +920,6 @@
   function rpRowHtml(row) {
     const title = rpTypeName(row) + (row.sender ? ' · ' + row.sender : '');
     const awards = rpAwardText(row.awards, row.total);
-    /* 电池/亲密/大航海红包的奖品不是礼物，不单列总价值 */
     const total = !row.guard && !RP_NO_TOTAL[row.rpType] && row.total
       ? Math.round(row.total / GOLD_PER_BATTERY) : 0;
     const ended = !!row.endTime && row.endTime <= nowSec();
@@ -999,7 +942,6 @@
       tail = '<span class="rp-go" data-lot="' + row.lotId + '">抢</span>';
     }
     const c = row.status === 'done' || ended ? null : rpCond(row);
-    /* 服务端的禁用文案只在条件确实未满足或已失败时展示，避免已满足时误报 */
     const note = !ended && row.disabled && (!c || c.met === false || row.status === 'fail') ? row.disabled : '';
     return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
       '<span class="rp-title">' + esc(title) + '</span>' +
@@ -1028,7 +970,6 @@
       const t = rpLeftText(row);
       if (list[i].textContent !== t) list[i].textContent = t;
     }
-    /* 结束时刻要整块重绘：出现名单入口 */
     let flip = false;
     rpMap.forEach((row) => {
       const e = !!row.endTime && row.endTime <= nowSec();
@@ -1040,7 +981,6 @@
     if (flip) rerender();
   }
 
-  /* 已结束的红包由用户手动移除，与雷达一致；记住 lotId 避免轮询重新加回 */
   function rpDrop(lotId) {
     if (!lotId) return;
     rpDropped.add(lotId);
@@ -1049,7 +989,6 @@
     rerender();
   }
 
-  /* 已结束且未参与的红包保留一段时间后清理，避免面板无限增长 */
   function pruneRp() {
     const now = Date.now();
     rpMap.forEach((row, lotId) => {
@@ -1118,7 +1057,6 @@
     }
   }
 
-  /* 先按 H5 形态请求，失败后按 PC 形态（不含 uid 与 statistics）重试一次 */
   function rpBody(roomid, uid, lotId, full) {
     const b = {
       room_id: roomid,
@@ -1136,7 +1074,6 @@
     return b;
   }
 
-  /* 主面板与雷达共用：先 H5 形态，未成功且拿到响应时再按 PC 形态重试一次 */
   async function rpDraw(roomid, uid, lotId) {
     let j = await rpPost(rpBody(roomid, uid, lotId, true));
     if (!j || rpNum(j.code) !== 0) {
@@ -1154,7 +1091,6 @@
     }
   }
 
-  /* 依次取第一个大于 0 的数值，H5 端对电池数量用的就是这种取值方式 */
   function rpFirstPos(...vals) {
     for (const v of vals) {
       if (v === undefined || v === null || v === '') continue;
@@ -1164,7 +1100,6 @@
     return 0;
   }
 
-  /* 电池类奖品不是真实礼物，金额字段实测单位是金瓜子，100 金瓜子 = 1 电池；小于 100 的值按电池数处理 */
   function rpWinAward(w) {
     const name = String(w.award_name || w.awardName || '');
     if (name.indexOf('电池') >= 0) {
@@ -1188,7 +1123,6 @@
     }).filter((w) => w.uid);
   }
 
-  /* 名单侧栏由面板里的 × 关闭；切换红包则改为显示该红包的名单，空名单短轮询等待结算 */
   async function rpWinners(lotId) {
     const row = rpRowAny(lotId);
     if (!row) return;
@@ -1254,16 +1188,13 @@
     rerender();
   }
 
-  /* ---------- 自动参与 ---------- */
 
-  /* 是否交给自动流程：开关打开、尚未参与、未结束，且参与条件不是明确未满足 */
   function rpAutoReady(row) {
     if (!rpAuto || !row || row.status !== 'idle') return false;
     if (row.endTime && row.endTime <= nowSec()) return false;
     return !rpCondBlock(row);
   }
 
-  /* 前一个请求完成后再隔 RP_AUTO_GAP 才发下一个，避免同一时刻集中触发风控 */
   function rpAutoPush(lotId) {
     rpAutoChain = rpAutoChain.then(async () => {
       if (!rpAuto) return;
@@ -1273,7 +1204,6 @@
     }).catch(() => {});
   }
 
-  /* 每个红包只在首次检出时排一次队；关掉开关即取消未到时的排队 */
   function rpAutoArm(row) {
     if (!rpAutoReady(row) || row.autoTimer) return;
     row.autoTimer = setTimeout(() => {
@@ -1289,7 +1219,6 @@
     });
   }
 
-  /* 由关切到开：主面板现存的红包不再等待，按结束时间先后依次参与 */
   function rpAutoAll() {
     Array.from(rpMap.values())
       .filter((r) => rpAutoReady(r))
@@ -1297,7 +1226,6 @@
       .forEach((r) => rpAutoPush(r.lotId));
   }
 
-  /* 立即改按钮外观，不等面板重绘 */
   function toggleAutoBtn() {
     const p = document.getElementById(PANEL_ID);
     const btn = p && p.querySelector('.rp-auto');
@@ -1314,13 +1242,11 @@
     toggleAutoBtn();
   }
 
-  /* 面板关闭即回到关，重新打开后不自动参与 */
   function autoStop() {
     rpAuto = false;
     rpAutoCancel();
   }
 
-  /* ---------- WebSocket 抓包 ---------- */
 
   function onMessages(text) {
     let arr;
@@ -1464,7 +1390,6 @@
   let ownRetryTimer = null;
   let ownRetryWait = RETRY_MS;
 
-  /* 只读观察页面自己的 /sub 连接：抓走鉴权包与心跳包，页面数据原样发出 */
   function onPageSend(url, data) {
     if (!url || !WS_SUB_RE.test(url)) return;
     const u8 = viewOf(data);
@@ -1557,7 +1482,6 @@
     proto.__qmdmb = true;
   }
 
-  /* ---------- 面板渲染 ---------- */
 
   let renderArgs = null;
   let rerenderTimer = null;
@@ -1598,7 +1522,6 @@
     if (document.getElementById(STYLE_ID)) return;
     const st = document.createElement('style');
     st.id = STYLE_ID;
-    /* IDS 用于面板容器本身，P(sel) 展开成多个面板的同名后代选择器 */
     const IDS = '#' + PANEL_ID + ',#' + LIVE_PANEL_ID + ',#' + RADAR_ID;
     const P = (sel) =>
       '#' + PANEL_ID + ' ' + sel + ',#' + LIVE_PANEL_ID + ' ' + sel + ',#' + RADAR_ID + ' ' + sel;
@@ -1607,16 +1530,13 @@
         background:rgba(20,20,22,.95);border:1px solid #fb7299;border-radius:10px;
         color:#e6e6e6;font:13px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
         padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
-      /* 每个面板右上角固定一个拖拽把手，落在内边距里，滚动交给内层容器，把手不随内容滚动 */
       #${PANEL_ID} .rs,#${LIVE_PANEL_ID} .rs,#${RADAR_ID} .rs,#${RPWIN_ID} .rs{
         position:absolute;right:0;top:0;width:12px;height:12px;cursor:nesw-resize;z-index:6;}
-      /* 弧的圆心与面板右上圆角同心，半径取面板圆角减 2，正好落在圆角内侧 */
       #${PANEL_ID} .rs::after,#${LIVE_PANEL_ID} .rs::after,#${RADAR_ID} .rs::after,#${RPWIN_ID} .rs::after{
         content:'';position:absolute;right:2px;top:2px;width:8px;height:8px;
         border-top:2px solid #fb7299;border-right:2px solid #fb7299;border-top-right-radius:8px;}
       #${PANEL_ID} .rs:hover::after,#${LIVE_PANEL_ID} .rs:hover::after,
       #${RADAR_ID} .rs:hover::after,#${RPWIN_ID} .rs:hover::after{border-color:#ffb0c6;}
-      /* 主面板宽度由内容撑开；高度由脚本按有无粉丝团决定，视口不足时由 max-height 收缩 */
       #${PANEL_ID}{display:flex;flex-direction:column;box-sizing:border-box;
         width:max-content;min-width:330px;max-width:calc(100vw - 20px);
         max-height:calc(100vh - 20px);overflow:hidden;}
@@ -1645,13 +1565,11 @@
       ${P('.x')}{position:absolute;right:0;top:1px;width:16px;height:16px;line-height:16px;text-align:center;
         color:#9a9a9a;cursor:pointer;font-size:15px;font-weight:400;border-radius:4px;}
       ${P('.x:hover')}{color:#fff;background:rgba(255,255,255,.14);}
-      /* 标题行按钮统一为粉色描边，与红包行的按钮一致 */
       ${P('.lb')}{position:absolute;right:48px;top:1px;box-sizing:border-box;height:16px;line-height:14px;
         padding:0 5px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         cursor:pointer;font-size:12px;font-weight:400;}
       ${P('.lb.on')}{background:rgba(251,114,153,.18);}
       ${P('.lb:hover')}{background:#fb7299;color:#fff;}
-      /* 手动刷新：占据 牌 与 × 之间，固定宽度保证与 .lb 的间距稳定 */
       ${P('.rf')}{position:absolute;right:24px;top:1px;box-sizing:border-box;width:20px;height:16px;
         line-height:14px;text-align:center;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         cursor:pointer;font-size:12px;font-weight:400;}
@@ -1694,20 +1612,16 @@
       ${P('.rp')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
       ${P('.rp .tt')}{position:relative;padding-right:84px;color:#fb7299;font-weight:600;margin-bottom:6px;}
       ${P('.rp-item')}{margin:5px 0;}
-      /* 雷达每个条目（含第一个）上方都用与主面板各栏一致的分隔线 */
       #${RADAR_ID} .rd-list .rp-item{border-top:1px dashed rgba(255,255,255,.16);
         padding-top:8px;margin-top:8px;}
       ${P('.rp-row')}{display:flex;align-items:center;gap:8px;}
       ${P('.rp-meta')}{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
       ${P('.rp-title')}{color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      /* 雷达行首的主播名与同接 */
       ${P('.rp-top')}{display:flex;align-items:center;gap:6px;min-width:0;}
       ${P('.rp-anchor')}{flex:0 1 auto;min-width:0;color:#fb7299;font-weight:600;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      /* 同接与奖品行同字号同色 */
       ${P('.rp-on')}{flex:0 0 auto;color:#9a9a9a;font-size:12px;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-      /* 奖品名过长时换行显示，不截断 */
       ${P('.rp-award')}{color:#9a9a9a;font-size:12px;white-space:normal;word-break:break-word;}
       ${P('.rp-total')}{color:#ffd97a;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       ${P('.rp-err')}{color:#ff4d4f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -1715,7 +1629,6 @@
       ${P('.rp-go')},${P('.rp-win')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
         border-radius:4px;padding:1px 8px;cursor:pointer;white-space:nowrap;text-decoration:none;}
       ${P('.rp-go:hover')},${P('.rp-win:hover')}{background:#fb7299;color:#fff;}
-      /* 雷达中已结束的红包用 × 移除 */
       ${P('.rp-x')}{flex:0 0 auto;font-size:12px;color:#fb7299;border:1px solid #fb7299;
         border-radius:4px;padding:1px 8px;cursor:pointer;white-space:nowrap;}
       ${P('.rp-x:hover')}{background:#fb7299;color:#fff;}
@@ -1745,7 +1658,6 @@
       #${RPWIN_ID} .wp{color:#9a9a9a;}
       #${RPWIN_ID} .wc{color:#9a9a9a;justify-self:end;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
-      /* 自动在左、雷达在右，两者固定同宽，内容居中；自动开启时内容换成转动动画 */
       ${P('.rp-auto')},${P('.rp-radar')}{position:absolute;top:0;box-sizing:border-box;width:36px;height:16px;
         display:flex;align-items:center;justify-content:center;
         color:#fb7299;border:1px solid #fb7299;border-radius:4px;
@@ -1754,7 +1666,6 @@
       ${P('.rp-auto')}{right:40px;}
       ${P('.rp-auto.on')},${P('.rp-radar.on')}{background:rgba(251,114,153,.18);}
       ${P('.rp-auto:hover')},${P('.rp-radar:hover')}{background:#fb7299;color:#fff;}
-      /* 动画元素不接收点击，否则点在圆环上时事件目标是它，按钮的委托判断不到 .rp-auto */
       ${P('.rp-spin')}{width:9px;height:9px;border:2px solid currentColor;border-top-color:transparent;
         border-radius:50%;animation:qmdmb-rp-spin .7s linear infinite;pointer-events:none;}
       @keyframes qmdmb-rp-spin{to{transform:rotate(360deg)}}
@@ -1770,18 +1681,11 @@
       #${RADAR_ID} .rd-stat{font-size:12px;color:#9a9a9a;margin-bottom:6px;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       #${RADAR_ID} .rd-list{flex:1 1 auto;overflow-y:auto;min-height:0;}
-      /* 滚动条贴到面板内边缘，内容缩进仍由左右内边距维持；滚到端点不向页面传递滚动 */
       #${PANEL_ID} .body,#${LIVE_PANEL_ID} .list,#${RADAR_ID} .rd-list,#${RPWIN_ID} .wl{
         margin:0 -14px;padding:0 14px;overscroll-behavior:contain;}
-      /* 三段各一个元素：入口、站内左段（粉丝团心形）、站内右段（大航海）。
-         入口复制站内左段的切片素材，左端圆头与右缘斜缝都由该素材承担；
-         站内左段去掉左端切片成为中段。选择器以入口节点与相邻关系为条件，
-         不依赖胶囊上的类与内联样式 */
       #${BTN_ID}{display:inline-flex;align-items:center;justify-content:center;
         font-size:13px;line-height:1;cursor:pointer;user-select:none;}
       #${BTN_ID}.qmdmb-entry-seg{flex:0 0 auto;height:22px;padding:0;border:0;box-sizing:border-box;}
-      /* 中段去掉左端切片成为平直边，再按同一角度斜切，与入口右缘构成等宽斜缝。
-         5px / 22px 与站内右段左缘的斜率一致；左移 3px 抵消斜切吃掉的可见宽度 */
       #${BTN_ID}.qmdmb-entry-seg ~ .left-part{box-sizing:border-box!important;min-width:0!important;
         flex:0 0 auto!important;margin-left:-3px!important;
         border-image-slice:0 15% 0 21% fill!important;
@@ -1789,20 +1693,17 @@
         -webkit-clip-path:polygon(5px 0,100% 0,100% 100%,0 100%);
         clip-path:polygon(5px 0,100% 0,100% 100%,0 100%);}
       #${BTN_ID}.qmdmb-entry-seg ~ .right-part{box-sizing:border-box!important;flex:0 0 auto!important;}
-      /* 无粉丝团胶囊可用时（未加入粉丝团等）独立成枚 */
       #${BTN_ID}.qmdmb-entry-solo{height:22px;padding:0 9px;border-radius:11px;
         background:#f69;color:#fff;margin-right:8px;}
     `;
     document.head.appendChild(st);
   }
 
-  /* ---------- 面板拖拽调整大小 ---------- */
 
   const SIZE_STORE = 'qmdmb-panel-size';
   const RESIZE_HTML = '<span class="rs" title="拖动调整面板大小"></span>';
   const PANEL_MIN_W = 220;
   const PANEL_MIN_H = 140;
-  /* 主面板在有粉丝团时的固定高度 */
   const PANEL_H = 750;
   let panelSizes = {};
 
@@ -1825,13 +1726,11 @@
     } catch (e) {}
   }
 
-  /* 自定义高度不能超过可用视口高度 */
   function sizeMaxH(id, lim) {
     const s = panelSizes[id];
     return Math.max(PANEL_MIN_H, s ? Math.min(s.h, lim) : lim);
   }
 
-  /* 把手用事件委托，面板重绘不需要重新绑定 */
   function onResizeDown(e) {
     const t = e.target;
     if (!t || !t.classList || !t.classList.contains('rs')) return;
@@ -1844,16 +1743,13 @@
     const w0 = r.width;
     const h0 = r.height;
     const move = (ev) => {
-      /* 底边固定、左边固定：向右拖变宽，向上拖变高；宽度不能拖出视口，高度不能超过视口 */
       const avail = Math.max(PANEL_MIN_W, Math.round(window.innerWidth - r.left - 10));
       const w = Math.max(PANEL_MIN_W, Math.min(Math.round(w0 + ev.clientX - x0), avail));
       const h = Math.max(PANEL_MIN_H, Math.min(Math.round(h0 - (ev.clientY - y0)), window.innerHeight - 20));
       panelSizes[el.id] = { w: w, h: h };
       el.style.width = w + 'px';
-      /* 主面板高度定死，副面板高度上限跟随内容 */
       if (el.id === PANEL_ID) el.style.height = h + 'px';
       else el.style.maxHeight = h + 'px';
-      /* 宽度变化会改变副面板的定位基准 */
       if (document.getElementById(RADAR_ID)) syncRadarBox();
       if (document.getElementById(RPWIN_ID)) syncWinBox();
       if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
@@ -1905,7 +1801,6 @@
       '<div class="jseg">' + seg + '</div>' + stateRow + '</div>';
   }
 
-  /* ---------- WS 心跳观测：只记录观测值，不统计观看时长 ---------- */
 
   let beatUrl = '';
   let decodeFails = 0;
@@ -1949,14 +1844,11 @@
     return !!(renderArgs && renderArgs.room && renderArgs.room.liveStatus === 1);
   }
 
-  /* 本地递增只在直播中累计，未开播时停在服务端值 */
   function watchSec() {
     if (watchServerSec == null) return null;
     return watchServerSec + Math.floor(watchLiveMs / 1000);
   }
 
-  /* 服务端按心跳计量，粒度粗、常落后于本地累计，直接覆盖会让总观时回退；
-     因此校准只前进不后退：服务端值更大才采纳，否则保留本地累计 */
   function syncWatchSec(sec, cur) {
     if (sec == null) return;
     watchServerSec = cur != null && cur > sec ? cur : sec;
@@ -1994,7 +1886,6 @@
   }
 
   function startCounters(info, uid) {
-    /* 同一主播才沿用上一轮累计，换直播间时旧值作废 */
     const prev = uid && uid === countUid ? watchSec() : null;
     stopCounters();
     if (info) {
@@ -2138,7 +2029,6 @@
 
     const sz = panelSizes[PANEL_ID];
     if (sz) p.style.width = sz.w + 'px';
-    /* 有粉丝团时高度固定，无粉丝团时随内容；视口不足由 CSS 的 max-height 收缩 */
     p.style.height = medal ? sizeMaxH(PANEL_ID, PANEL_H) + 'px' : 'auto';
 
     if (!medal && !tasks) {
@@ -2199,7 +2089,6 @@
     syncLiveBox();
   }
 
-  /* ---------- 所有直播间面板 ---------- */
 
   let liveRows = null;
   let liveLoading = false;
@@ -2207,8 +2096,8 @@
   let liveOnlineTimer = null;
   let liveRefreshing = false;
   let liveOnlineRefreshing = false;
-  const LIVE_REFRESH_MS = 3000;    /* 直播状态：批量接口 */
-  const LIVE_ONLINE_MS = 15000;    /* 在线人数：逐房间接口 */
+  const LIVE_REFRESH_MS = 3000;
+  const LIVE_ONLINE_MS = 15000;
 
   function liveStatusInfo(st) {
     if (st === 1) return { cls: 'on', text: '直播中' };
@@ -2221,7 +2110,6 @@
     return String(Number(n) || 0);
   }
 
-  /* 十进制颜色值转 #rrggbb，必须补足 6 位 */
   function medalColor(n) {
     const v = Number(n) || 0;
     return v > 0 ? '#' + v.toString(16).padStart(6, '0').slice(-6) : '#c9c9c9';
@@ -2297,7 +2185,6 @@
     toggleLiveBtn();
   }
 
-  /* 副面板贴主面板右侧 10px（名单面板已开时贴其右侧），与主面板顶对齐，高度随内容 */
   function syncLiveBox() {
     const q = document.getElementById(LIVE_PANEL_ID);
     const p = document.getElementById(PANEL_ID);
@@ -2340,7 +2227,6 @@
     liveOnlineTimer = setInterval(refreshOnline, LIVE_ONLINE_MS);
   }
 
-  /* 只改同接与状态文本，不重建列表，避免闪烁与滚动跳动 */
   function paintLiveRows() {
     const q = document.getElementById(LIVE_PANEL_ID);
     if (!q || !liveRows) return;
@@ -2393,7 +2279,6 @@
     if (el && liveRows[i]) el.textContent = '同接 ' + fmtOnline(liveRows[i].online);
   }
 
-  /* 逐房间取真实在线人数，仅查直播中/轮播中；串行请求以限制速率 */
   async function refreshOnline() {
     if (liveOnlineRefreshing || !liveRows || !liveRows.length) return;
     if (!document.getElementById(LIVE_PANEL_ID)) {
@@ -2416,7 +2301,6 @@
     }
   }
 
-  /* 页面切到后台时暂停轮询，回到前台立即刷新一次 */
   function onVisibilityChange() {
     if (document.hidden) {
       stopLiveTimer();
@@ -2461,7 +2345,6 @@
           roomid: s.room_id || m.roomid || 0
         };
       });
-      /* 点亮优先 → 直播中优先 → 等级降序 */
       liveRows.sort((a, b) =>
         (b.light ? 1 : 0) - (a.light ? 1 : 0) ||
         (b.live === 1 ? 1 : 0) - (a.live === 1 ? 1 : 0) ||
@@ -2478,36 +2361,28 @@
     }
   }
 
-  /* ---------- 红包雷达 ---------- */
 
   let radarAreas = null;
-  /* 选中的分区 id 与分组 key，可多选 */
   let radarSels = [];
   let radarNum = 100;
   let radarRooms = [];
   const radarMap = new Map();
   let radarTimer = null;
-  /* 面板打开即按下计时器，但只有启动后才发请求；计时器负责倒计时与状态行的刷新 */
   let radarOn = false;
   let radarLoading = false;
   let radarFetchAt = 0;
-  /* 最近一次房间池抓取尝试的时间，失败时也推进，避免每秒重试 */
   let radarPoolAt = 0;
   let radarEpoch = 0;
-  /* 连续失败只提示，不中断扫描；下一次成功即清除 */
   let radarFailMsg = '';
   let radarDiag = '';
   let radarFails = 0;
-  /* 非风控类失败单独计数，避免网络抖动也弹出「请刷新网页过验证」 */
   let radarErrFails = 0;
   let radarTokenAt = 0;
   let radarTokens = RADAR_BUCKET_MAX;
   let radarStatCache = null;
   let radarNewCount = 0;
   let radarNewTimer = null;
-  /* 已结束条目数，变化时重绘一次，把「进入」换成 × */
   let radarEndedMark = -1;
-  /* 命中的直播间同接：逐房间查询，与所有直播间面板同一接口 */
   let radarOnlineBusy = false;
   let radarOnlineAt = 0;
 
@@ -2515,7 +2390,6 @@
     try {
       const o = JSON.parse(localStorage.getItem(RADAR_STORE) || 'null');
       if (!o || typeof o !== 'object') return;
-      /* 选中项既可能是分区 id（数字）也可能是分组 key（字符串），旧版只存单个值 */
       const arr = Array.isArray(o.area) ? o.area : [o.area];
       radarSels = arr
         .map((x) => (typeof x === 'string' && radarGroupOf(x) ? x : rpNum(x)))
@@ -2531,7 +2405,6 @@
     } catch (e) {}
   }
 
-  /* 多选后房间池规模由来源数量决定，冷间隔按池子实际大小分档 */
   function radarCold() {
     const n = radarRooms.length;
     for (let i = 0; i < RADAR_NUMS.length; i++) {
@@ -2540,17 +2413,14 @@
     return RADAR_COLD[RADAR_NUMS[RADAR_NUMS.length - 1]];
   }
 
-  /* 固定节拍会让整批房间同时到期，间隔统一加 ±15% 抖动 */
   function radarJitter(ms) {
     return Math.round(ms * (0.85 + Math.random() * 0.3));
   }
 
-  /* 冷间隔与全局暂停用更宽的 ±30% 抖动，避免恢复后仍按固定秒级节拍成批复发 */
   function radarCoolJitter(ms) {
     return Math.round(ms * (0.7 + Math.random() * 0.6));
   }
 
-  /* 所有房间共用的令牌桶，取出一个令牌才允许发一次扫描请求 */
   function radarTokenTake() {
     const now = Date.now();
     if (!radarTokenAt) radarTokenAt = now;
@@ -2580,7 +2450,6 @@
     }
   }
 
-  /* 房间对象字段名跨版本不一致，逐个字段取别名 */
   function radarRoom(it) {
     const roomid = rpNum(it.roomid || it.room_id);
     if (!roomid) return null;
@@ -2590,7 +2459,6 @@
       uname: String(it.uname || it.name || ''),
       title: String(it.title || ''),
       online: rpNum(it.online || it.online_num),
-      /* 未开播与轮播的房间不扫；字段缺失时不过滤 */
       live: it.live_status != null ? rpNum(it.live_status) : null
     };
   }
@@ -2617,7 +2485,6 @@
     }
   }
 
-  /* 翻页收满档位数；排序参数可能失效，收满后统一按人气本地重排 */
   async function fetchAreaRooms(areaId, num) {
     const pages = Math.ceil(num / RADAR_PAGE_SIZE) + 1;
     let url = API_AREAROOMS;
@@ -2626,7 +2493,6 @@
     let list = [];
     for (let p = 1; p <= pages; p++) {
       const page = await fetchAreaRoomsPage(url, areaId, p);
-      /* 主端点首页无数据时换备用端点重来一次 */
       if (url === API_AREAROOMS && !fallback && (!page || !page.length) && p === 1) {
         url = API_AREAROOMS_ALT;
         fallback = true;
@@ -2649,7 +2515,6 @@
       out.push(r);
     });
     out.sort((a, b) => b.online - a.online);
-    /* 多来源时不能清空别的来源写下的提示 */
     if (fallback) radarDiag = '已回退备用分区接口';
     return out.filter(radarKeep).slice(0, num);
   }
@@ -2680,7 +2545,6 @@
     return groups;
   }
 
-  /* vup 表的两种返回体：带 data 包装与直接以 uid 为键 */
   function vupGrouped(j) {
     const d = j && j.data && typeof j.data === 'object' ? j.data : j;
     const groups = radarGroupBuckets();
@@ -2693,7 +2557,6 @@
     return groups;
   }
 
-  /* vdb 返回体：分组是独立条目，成员用 group 字段指向分组的 uuid */
   function vdbGrouped(j) {
     const list = j && Array.isArray(j.vtbs) ? j.vtbs : null;
     if (!list) return null;
@@ -2709,7 +2572,6 @@
     });
     const groups = radarGroupBuckets();
     list.forEach((it) => {
-      /* 分组条目自身也带 group 字段，指向自己，不算成员 */
       if (!it || !it.group || it.group === it.uuid) return;
       const k = keyed[it.group];
       if (!k) return;
@@ -2731,7 +2593,6 @@
     return groups;
   }
 
-  /* 手工名单并入取数结果；缓存存的是原始名单，补入项每次返回时重新合并 */
   function radarPatch(groups) {
     Object.keys(RADAR_GROUP_PATCH).forEach((k) => {
       if (!groups[k]) return;
@@ -2742,7 +2603,6 @@
     return groups;
   }
 
-  /* 逐个源尝试；缺组的源先留存，只有所有组都有成员才认定该源可用 */
   async function fetchGroupUids() {
     const hit = vupCache();
     if (hit) return radarPatch(hit);
@@ -2771,7 +2631,6 @@
     return null;
   }
 
-  /* 归属分组的房间不能按分区枚举，改用按 uid 批量取房间与开播状态 */
   async function fetchGroupRooms(key) {
     const groups = await fetchGroupUids();
     if (!groups) return null;
@@ -2783,7 +2642,6 @@
       if (!j || rpNum(j.code) !== 0) return null;
       Object.keys(j.data || {}).forEach((k) => {
         const r = radarRoom(j.data[k]);
-        /* 该接口以 uid 为键，项内可能不含 uid，缺省用键补齐 */
         if (r && !r.uid) r.uid = rpNum(k);
         if (r) out.push(r);
       });
@@ -2793,7 +2651,6 @@
     return out.filter(radarKeep);
   }
 
-  /* 重建房间池时保留仍存在的房间对象，避免在途请求被重复派发 */
   function radarApplyRooms(list) {
     const now = Date.now();
     const old = new Map(radarRooms.map((r) => [r.roomid, r]));
@@ -2803,7 +2660,6 @@
         return {
           roomid: r.roomid, uid: r.uid, uname: r.uname, title: r.title,
           online: r.online, live: r.live,
-          /* 首发错峰，避免开场瞬间集中请求 */
           nextAt: now + Math.min(i * 500, 15000) + Math.floor(Math.random() * 300),
           flight: false,
           fail: 0
@@ -2822,7 +2678,6 @@
     return Date.now() - radarPoolAt > RADAR_LIST_MS;
   }
 
-  /* 多个来源各自取房间后合并去重，同一个直播间只留一份 */
   async function loadRadarRooms(epoch) {
     radarLoading = true;
     radarPoolAt = Date.now();
@@ -2840,7 +2695,6 @@
     const cur = epoch === radarEpoch;
     radarLoading = false;
     if (!cur) return;
-    /* 未选来源或全部失败都会得到空池 */
     if (!lists.length) {
       if (bad) radarDiag = '房间列表获取失败';
       radarApplyRooms([]);
@@ -2860,7 +2714,6 @@
     renderRadarPanel();
   }
 
-  /* 换分区或档位后旧房间池作废，未启动时也要清掉，启动时才不会扫到上一批房间 */
   function radarPoolDrop() {
     radarRooms = [];
     radarPoolAt = 0;
@@ -2869,7 +2722,6 @@
     radarStatCache = null;
   }
 
-  /* 分区与分组共用一组选中项，点一次加入，再点一次移除 */
   function toggleRadarSel(id) {
     if (!id) return;
     const i = radarSels.indexOf(id);
@@ -2975,15 +2827,12 @@
     if (!ok) {
       room.fail++;
       room.nextAt = now + radarCoolJitter(room.fail >= RADAR_FAILS ? RADAR_COOL_MS : radarCold());
-      /* 风控码与其他失败分开计数，只有风控码才提示过验证 */
       const risk = RADAR_RISK_CODES.indexOf(rpNum(bad)) >= 0;
       const fails = risk ? ++radarFails : ++radarErrFails;
       if (fails >= RADAR_PAUSE_FAILS) {
         if (risk) radarFails = 0;
         else radarErrFails = 0;
-        /* 达阈值只提示并清零计数，扫描继续；降速交由各房间的冷间隔处理 */
         radarFailMsg = risk ? '请刷新网页过验证' : '扫描异常';
-        /* 具体失败码留在控制台，状态行只给简短提示 */
         if (window.console) console.warn('[qmdmb] 雷达连续失败：' + bad);
       }
       return;
@@ -3060,21 +2909,17 @@
     if (radarPrune() || radarEndedCount() !== radarEndedMark) renderRadarPanel();
     else paintRadarLefts();
     paintRadarStat();
-    /* 未启动不发扫描请求 */
     if (!radarOn) return;
     const now = Date.now();
-    /* 房间池长期不重建会漏掉新开播的直播间 */
     if (!radarLoading && radarPoolStale()) loadRadarRooms(radarEpoch);
     let n = 0;
     radarRooms.forEach((r) => { if (r.flight) n++; });
     if (n < RADAR_CONC) {
-      /* 当前所在直播间由主面板轮询，导航进入后立即从雷达排除 */
       const self = rpRoom ? rpRoom.roomId : 0;
       const due = radarRooms
         .filter((r) => !r.flight && r.nextAt <= now && r.roomid !== self)
         .sort((a, b) => a.nextAt - b.nextAt);
       for (let i = 0; i < due.length && n < RADAR_CONC; i++) {
-        /* 令牌用完说明本次节拍的额度已打满，剩下的留到下一拍 */
         if (!radarTokenTake()) break;
         radarScan(due[i]);
         n++;
@@ -3110,7 +2955,6 @@
     const area = (radarAreas || RADAR_AREAS_FALLBACK).map((a) =>
       '<span class="rd-btn rd-area' + (radarSels.indexOf(a.id) >= 0 ? ' on' : '') +
       '" data-area="' + a.id + '">' + esc(a.name) + '</span>').join('');
-    /* 归属分组跟在分区之后，与分区共用同一组选中项 */
     const grp = RADAR_GROUPS.map((g) =>
       '<span class="rd-btn rd-grp' + (radarSels.indexOf(g.key) >= 0 ? ' on' : '') +
       '" data-grp="' + g.key + '">' + g.name + '</span>').join('');
@@ -3118,7 +2962,6 @@
   }
 
   function radarNumsHtml() {
-    /* 只选分组时人数固定，档位无意义 */
     const onlyGrp = radarSels.length > 0 && radarSels.every((s) => !!radarGroupOf(s));
     const nums = onlyGrp ? '' : RADAR_NUMS.map((n) =>
       '<span class="rd-btn rd-num' + (n === radarNum ? ' on' : '') +
@@ -3127,7 +2970,6 @@
       (radarOn ? '停止' : '启动') + '</span>';
   }
 
-  /* 跨房间只能显示条件文本，无法判断是否已满足；是否满足由直播间内的参与流程处理 */
   function radarCondText(row) {
     if (row.need === 2) return '需先加入粉丝团';
     if (row.need === 3) return '需先开通大航海';
@@ -3144,12 +2986,10 @@
       ? Math.round(row.total / GOLD_PER_BATTERY) : 0;
     const cond = radarCondText(row);
     const condHtml = cond ? '<span class="rp-cond">' + esc(cond) + '</span>' : '';
-    /* 未结束显示进入，倒计时结束后只剩手动移除的 × */
     let tail;
     if (row.endTime && row.endTime <= nowSec()) {
       tail = '<span class="rp-x" data-lot="' + row.lotId + '" title="已结束，点击移除">×</span>';
     } else {
-      /* 开奖时刻在直播间的用户才可中奖，雷达只负责发现，参与要在直播间内完成 */
       tail = '<a class="rp-go" href="https://live.bilibili.com/' + Number(row.roomid) +
         '" target="_blank" rel="noopener"' + (row.rtitle ? ' title="' + esc(row.rtitle) + '"' : '') +
         '>进入</a>';
@@ -3165,7 +3005,6 @@
       tail + '</div></div>';
   }
 
-  /* 已结束的红包由用户手动移除，避免长期占位 */
   function radarDrop(lotId) {
     if (!radarMap.delete(lotId)) return;
     renderRadarPanel();
@@ -3199,7 +3038,6 @@
     if (el && row) el.textContent = radarOnlineText(row);
   }
 
-  /* 逐房间取真实在线人数，与所有直播间面板同一接口；串行请求以限制速率 */
   async function radarRefreshOnline() {
     if (radarOnlineBusy || !radarMap.size) return;
     radarOnlineBusy = true;
@@ -3230,7 +3068,6 @@
     el.textContent = t;
   }
 
-  /* 副面板定位为单向链：主面板 → 中奖名单 → 雷达 → 所有直播间 */
   function syncRadarBox() {
     const q = document.getElementById(RADAR_ID);
     const p = document.getElementById(PANEL_ID);
@@ -3280,7 +3117,6 @@
     toggleRadarBtn();
   }
 
-  /* 开时按钮内容是转动动画，关时是文字；两者共用固定宽度 */
   function autoBtnInner() {
     return rpAuto ? '<i class="rp-spin"></i>' : '自动';
   }
@@ -3301,7 +3137,6 @@
     if (btn) btn.classList.toggle('on', !!document.getElementById(RADAR_ID));
   }
 
-  /* 面板关闭即停止扫描，重新打开后处于未启动状态 */
   function closeRadarPanel() {
     radarEpoch++;
     radarEndedMark = -1;
@@ -3326,13 +3161,11 @@
     const epoch = radarEpoch;
     radarStatCache = null;
     renderRadarPanel();
-    /* 计时器只驱动界面刷新；扫描要等点「启动」 */
     startRadarTimer();
     if (!radarAreas) {
       const list = await fetchAreaList();
       if (epoch !== radarEpoch || !document.getElementById(RADAR_ID)) return;
       radarAreas = list || RADAR_AREAS_FALLBACK;
-      /* 分区会增删，恢复出的旧 id 若已不存在就丢掉 */
       radarSels = radarSels.filter((s) => radarGroupOf(s) || radarAreas.some((a) => a.id === s));
       if (!radarSels.length) radarSels = [radarAreas[0].id];
       radarPrefSave();
@@ -3342,7 +3175,6 @@
 
   let refreshing = false;
 
-  /* 手动刷新：先按当天重建本地累计，再绕开缓存整体重拉服务端数据 */
   async function refreshPanel() {
     if (refreshing || !document.getElementById(PANEL_ID)) return;
     refreshing = true;
@@ -3359,7 +3191,6 @@
       const b = document.querySelector('#' + PANEL_ID + ' .rf');
       if (b) b.classList.remove('on');
     }
-    /* open 失败时自己已经弹过原因，这里不再覆盖 */
     if (ok) toast('已刷新', true);
   }
 
@@ -3394,7 +3225,6 @@
     }
   }
 
-  /* ---------- 按钮注入 ---------- */
 
   function togglePanel() {
     const p = document.getElementById(PANEL_ID);
@@ -3429,7 +3259,6 @@
     return follow ? { el: follow, after: true } : null;
   }
 
-  /* 入口只保留一个图标，外观由所在位置决定：胶囊内为一段，独立时为一枚胶囊 */
   function makeEntry() {
     const btn = document.createElement('span');
     btn.id = BTN_ID;
@@ -3443,7 +3272,6 @@
     return btn;
   }
 
-  /* 只写与现值不同的声明，避免重复写入触发站内的变动观察 */
   function iput(el, k, v) {
     const s = el.style;
     if (s.getPropertyValue(k) !== v || s.getPropertyPriority(k) !== 'important') {
@@ -3451,7 +3279,6 @@
     }
   }
 
-  /* 三段等宽与中段斜边直接写成内联样式：不依赖胶囊上的类，也不依赖节点顺序 */
   function applyUnit(btn, part, right, u) {
     const w = u + 'px';
     const cut = 'polygon(5px 0,100% 0,100% 100%,0 100%)';
@@ -3463,13 +3290,10 @@
     iput(btn, 'width', w);
     if (part) {
       iput(part, 'box-sizing', 'border-box');
-      /* 左移 3px 再补 3px 宽：斜切吃掉的中段可见宽度与左侧斜缝宽度同时补回，
-         右缘位置不变，右段不受影响 */
       iput(part, 'width', (u + 3) + 'px');
       iput(part, 'margin-left', '-3px');
       iput(part, 'min-width', '0');
       iput(part, 'flex', '0 0 auto');
-      /* 左端切片保留 21%，前端宽度设为 0：切片不绘制，填充区也就不含左端圆弧 */
       iput(part, 'border-image-slice', '0 15% 0 21% fill');
       iput(part, 'border-image-width', '0 7px 0 0');
       iput(part, '-webkit-clip-path', cut);
@@ -3482,7 +3306,6 @@
     }
   }
 
-  /* 量右段（大航海）的自然宽度：先摘掉自己写入的宽度再读 */
   function naturalWidth(el) {
     const s = el.style;
     const keep = s.getPropertyValue('width');
@@ -3492,7 +3315,6 @@
     return w;
   }
 
-  /* 以右段自然宽度为一段宽；右段尚未渲染时先按站内下限占位，待其出现后重算 */
   function fitSegment(target, btn, remeasure) {
     const part = target.el.querySelector('.followed .left-part');
     const right = target.el.querySelector('.followed .right-part');
@@ -3508,9 +3330,6 @@
     return !right || right.scrollWidth > right.clientWidth + 1;
   }
 
-  /* 入口的左端圆头沿用站内左段的切片素材。站内切到深色时
-     `.follow-ctnr.enable-dark` 会换成另一份素材，按计算结果跟随；
-     站内无素材时退回圆角底色 */
   function copyCap(btn, part) {
     const cs = getComputedStyle(part);
     const src = cs.borderImageSource;
@@ -3519,7 +3338,6 @@
     btn.style.removeProperty('background');
     btn.style.removeProperty('border-radius');
     if (!src || src === 'none') {
-      /* 站内样式表可能晚于入口加载，此时先占位，素材可用后补取 */
       const cap = part.closest('.follow-ctnr');
       const dark = !!(cap && cap.classList.contains('enable-dark'));
       btn._capOk = false;
@@ -3528,7 +3346,6 @@
       return;
     }
     btn._capOk = true;
-    /* 切片值取站内左段的原值；中段的切片已被改写，不能从它读回 */
     btn.style.setProperty('border-image-source', src);
     btn.style.setProperty('border-image-slice', '0 15% 0 21% fill');
     btn.style.setProperty('border-image-width', '0 7px 0 10px');
@@ -3544,8 +3361,6 @@
     });
   }
 
-  /* 已加入粉丝团时插在胶囊左段之前，成为最左一段；否则退回独立胶囊。
-     等分与分隔由以入口节点为条件的样式规则承担，站内重绘替换节点时依然生效 */
   function mountEntry(btn, target, part) {
     if (part) {
       btn._cap = target.el;
@@ -3582,19 +3397,17 @@
     const target = findTarget();
     const old = document.getElementById(BTN_ID);
     if (old) {
-      if (!target) return;
-      /* 站内重绘会连胶囊内节点一起重建，断开后需要重新挂载；胶囊晚于入口出现时形态也会变 */
+      if (!target) {
+        if (!old.isConnected) old.remove();
+        return;
+      }
       const part = target.el.querySelector('.followed .left-part');
       const mode = part ? 'seg' : 'solo';
       if (old._cap === target.el && old.isConnected && old._mode === mode) {
         if (mode === 'seg') {
-          /* 入口须紧邻左段之前，相邻选择器才会命中：站内调整顺序时重新插入 */
           if (old.nextElementSibling !== part) mountEntry(old, target, part);
           else {
-            /* 素材变化（深色切换）时同步，未变化时函数内直接返回 */
             copyCap(old, part);
-            /* 右段晚于入口渲染、或其后内容变宽（头衔载入）时重算段宽；
-               站内改写中段的内联样式时由同一次调用补回 */
             fitSegment(target, old, !old._u || segOverflow(target));
           }
         }
@@ -3609,9 +3422,11 @@
     mountEntry(btn, target, part);
   }
 
-  /* ---------- 可见性 ---------- */
 
   let restingH = null;
+  let restingNode = null;
+  let sampleAt = 0;
+  let lastH = -1;
   let missCount = 0;
 
   function refreshBtnVisibility() {
@@ -3621,9 +3436,26 @@
     const lc = sv && sv.querySelector('.left-container');
     let open = false;
     if (lc) {
+      if (lc !== restingNode) {
+        restingNode = lc;
+        restingH = null;
+        sampleAt = 0;
+        lastH = -1;
+      }
       const h = lc.getBoundingClientRect().height;
-      restingH = restingH === null ? h : Math.min(restingH, h);
-      open = restingH < 250 && h > restingH + 100;
+      if (Date.now() - sampleAt >= 900) {
+        sampleAt = Date.now();
+        if (h > 0 && h === lastH) {
+          restingH = restingH === null ? h : Math.min(restingH, h);
+        }
+        lastH = h > 0 ? h : -1;
+      }
+      if (restingH !== null) open = restingH < 250 && h > restingH + 100;
+    } else {
+      restingNode = null;
+      restingH = null;
+      sampleAt = 0;
+      lastH = -1;
     }
     if (open) {
       missCount = 0;
@@ -3635,7 +3467,6 @@
 
   function init() {
     if (!document.body) return;
-    /* 样式表原先只在首次打开面板时注入，入口在渲染后的一段时间里没有规则可依 */
     ensureStyle();
     injectButton();
     refreshBtnVisibility();
@@ -3645,13 +3476,19 @@
     init();
     setTimeout(init, 500);
     if (window.MutationObserver) {
+      let last = 0;
       let t = null;
       new MutationObserver(() => {
-        clearTimeout(t);
-        t = setTimeout(init, 200);
+        if (t) return;
+        t = setTimeout(() => {
+          t = null;
+          last = Date.now();
+          init();
+        }, Math.max(0, 200 - (Date.now() - last)));
       }).observe(document.body, { childList: true, subtree: true, attributes: true });
     }
     setInterval(() => {
+      injectButton();
       refreshBtnVisibility();
       syncRadarBox();
       syncLiveBox();
