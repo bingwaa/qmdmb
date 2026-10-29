@@ -8,7 +8,12 @@
 
 | 使用前 | 使用后 |
 | ------ | ------ |
-| <img src="images/eff5.webp" width="240"><br><img src="images/eff3.webp" width="240"><br><img src="images/eff0.webp" width="240"> | <img src="images/eff4.webp" width="240"><br><img src="images/eff2.webp" width="240"><br><img src="images/eff1.webp" width="240"> |
+| <img src="images/eff5.webp" width="240"> | <img src="images/eff4.webp" width="240"> |
+| <img src="images/eff9.webp" width="240"> | <img src="images/eff8.webp" width="240"> |
+| <img src="images/eff3.webp" width="240"> | <img src="images/eff2.webp" width="240"> |
+| <img src="images/eff0.webp" width="240"> | <img src="images/eff1.webp" width="240"> |
+| <img src="images/eff10.webp" width="240"> | <img src="images/eff11.webp" width="240"> |
+| <img src="images/eff7.webp" width="240"> | <img src="images/eff11.webp" width="240"> |
 
 ## 安装
 
