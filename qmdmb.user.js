@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.4
+// @version      1.9.5
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -656,6 +656,7 @@
   let rpWinLot = 0;
   let rpAuto = false;
   let rpAutoChain = Promise.resolve();
+  const SEC_OPEN = { journey: false, gain: false, rp: true, tasks: false };
 
   function nowSec() {
     return Math.floor(Date.now() / 1000);
@@ -852,6 +853,16 @@
     return '<div class="dim">中奖 ' + list.length + ' 人</div>' + list.map(rpWinRowHtml).join('');
   }
 
+  function scrollTopOf(el, sel) {
+    const q = el && el.querySelector(sel);
+    return q ? q.scrollTop : 0;
+  }
+
+  function restoreScroll(el, sel, top) {
+    const q = el && el.querySelector(sel);
+    if (q && top) q.scrollTop = top;
+  }
+
   function capRows(list, n) {
     if (!list) return;
     const kids = Array.prototype.filter.call(list.children, (el) => !el.classList.contains('dim'));
@@ -893,11 +904,13 @@
     const q = document.getElementById(RPWIN_ID);
     if (!q) return;
     const row = rpRowAny(rpWinLot);
+    const scroll = scrollTopOf(q, '.wl');
     q.innerHTML = '<div class="hd">中奖名单' +
       (row ? '<span class="dim"> ' + esc(rpTypeName(row)) + '</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
       '<div class="wl">' + rpWinBody(row) + '</div>' + RESIZE_HTML;
     capRows(q.querySelector('.wl'), RP_WIN_MAX);
+    restoreScroll(q, '.wl', scroll);
     syncWinBox();
     syncRadarBox();
     if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
@@ -957,7 +970,8 @@
   function rpHtml() {
     const rows = Array.from(rpMap.values()).sort((a, b) => a.endTime - b.endTime);
     const body = rows.length ? rows.map(rpRowHtml).join('') : '<div class="dim">未检测到红包</div>';
-    return '<div class="rp"><div class="tt">红包' + autoBtnHtml() + radarBtnHtml() + '</div>' + body + '</div>';
+    return '<div class="rp"><div class="tt" data-sec="rp">' + secToggle('rp') +
+      '红包' + autoBtnHtml() + radarBtnHtml() + '</div>' + secWrap('rp', body) + '</div>';
   }
 
   function paintRedPackets() {
@@ -1510,7 +1524,7 @@
     }
     t.textContent = msg;
     t.style.cssText =
-      'position:fixed;left:16px;bottom:64px;z-index:2147483000;padding:8px 14px;' +
+      'position:fixed;left:16px;bottom:64px;z-index:2147483000;pointer-events:none;padding:8px 14px;' +
       'background:rgba(0,0,0,.85);color:#fff;font-size:13px;border-radius:6px;' +
       'max-width:320px;transition:opacity .4s;border:1px solid ' + (ok ? '#fb7299' : '#ff4d4f') + ';';
     t.style.opacity = '1';
@@ -1597,7 +1611,7 @@
       ${P('.p-action')}{color:#fff;background:#f0a13c;border:1px solid #f0a13c;}
       ${P('.journey')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
       ${P('.journey .tt')}{color:#fb7299;font-weight:600;margin-bottom:6px;}
-      ${P('.journey .tt span')}{font-weight:400;margin-left:6px;}
+      ${P('.journey .tt .dim')}{font-weight:400;margin-left:6px;}
       ${P('.jseg')}{display:flex;gap:4px;margin:8px 0 0;}
       ${P('.jseg i')}{flex:1 1 0;height:8px;border-radius:3px;background:rgba(255,255,255,.12);}
       ${P('.jseg i.on')}{background:linear-gradient(90deg,#fb7299,#ffb0c6);}
@@ -1611,6 +1625,13 @@
       ${P('.g-sum b')}{color:#ffd97a;font-size:14px;}
       ${P('.rp')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
       ${P('.rp .tt')}{position:relative;padding-right:84px;color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.sec-toggle')}{display:inline-flex;align-items:center;justify-content:center;
+        width:16px;height:14px;margin:0 1px 0 0;vertical-align:middle;cursor:pointer;}
+      ${P('.sec-toggle::before')}{content:'';width:0;height:0;border-left:5px solid transparent;
+        border-right:5px solid transparent;border-top:6px solid #fb7299;transform:rotate(-90deg);}
+      ${P('.sec-toggle.open::before')}{transform:none;}
+      ${P('.sec-body.hide')}{display:none;}
+      ${P('.tt[data-sec]')}{cursor:pointer;user-select:none;}
       ${P('.rp-item')}{margin:5px 0;}
       #${RADAR_ID} .rd-list .rp-item{border-top:1px dashed rgba(255,255,255,.16);
         padding-top:8px;margin-top:8px;}
@@ -1699,7 +1720,7 @@
       #${BTN_ID}.qmdmb-entry-seg ~ .right-part .guard-expired-text{display:none!important;}
       #${BTN_ID}.qmdmb-entry-solo{height:22px;padding:0 9px;border-radius:11px;
         background:#f69;color:#fff;margin-right:8px;}
-      html[lab-style*=dark] #${BTN_ID}.qmdmb-entry-solo{
+      html[lab-style*=dark] #${BTN_ID}.qmdmb-entry-solo.qmdmb-entry-off{
         background:var(--bg3,#0a0b0c);color:var(--text2,#a2a7ae);}
     `;
     document.head.appendChild(st);
@@ -1754,7 +1775,7 @@
       const h = Math.max(PANEL_MIN_H, Math.min(Math.round(h0 - (ev.clientY - y0)), window.innerHeight - 20));
       panelSizes[el.id] = { w: w, h: h };
       el.style.width = w + 'px';
-      if (el.id === PANEL_ID) el.style.height = h + 'px';
+      if (el.id === PANEL_ID) { el.style.height = h + 'px'; el.style.maxHeight = h + 'px'; }
       else el.style.maxHeight = h + 'px';
       if (document.getElementById(RADAR_ID)) syncRadarBox();
       if (document.getElementById(RPWIN_ID)) syncWinBox();
@@ -1767,6 +1788,26 @@
     };
     document.addEventListener('mousemove', move, true);
     document.addEventListener('mouseup', up, true);
+  }
+
+  function secToggle(key) {
+    return '<span class="sec-toggle' + (SEC_OPEN[key] ? ' open' : '') +
+      '" data-sec="' + key + '" title="展开/折叠"></span>';
+  }
+
+  function secWrap(key, html) {
+    return '<div class="sec-body' + (SEC_OPEN[key] ? '' : ' hide') +
+      '" data-sec="' + key + '">' + html + '</div>';
+  }
+
+  function toggleSec(key) {
+    SEC_OPEN[key] = !SEC_OPEN[key];
+    const p = document.getElementById(PANEL_ID);
+    if (!p) return;
+    const ts = p.querySelectorAll('.sec-toggle[data-sec="' + key + '"]');
+    for (let i = 0; i < ts.length; i++) ts[i].classList.toggle('open', SEC_OPEN[key]);
+    const b = p.querySelector('.sec-body[data-sec="' + key + '"]');
+    if (b) b.classList.toggle('hide', !SEC_OPEN[key]);
   }
 
   function tasksHtml(tasks) {
@@ -1803,8 +1844,9 @@
       stateRow = '<div class="save">旅程礼物已解锁 · 剩余 ' + (days >= 1 ? days + ' 天' : hh + ':' + mm) + ' 领取时限</div>';
     }
 
-    return '<div class="journey"><div class="tt">亲密之旅<span class="dim">已完成 ' + done + ' / ' + total + ' 天</span></div>' +
-      '<div class="jseg">' + seg + '</div>' + stateRow + '</div>';
+    return '<div class="journey"><div class="tt" data-sec="journey">' + secToggle('journey') +
+      '亲密之旅<span class="dim">已完成 ' + done + ' / ' + total + ' 天</span></div>' +
+      secWrap('journey', '<div class="jseg">' + seg + '</div>' + stateRow) + '</div>';
   }
 
 
@@ -1990,7 +2032,8 @@
       }
       foot += other + '</div>';
     }
-    return '<div class="gain"><div class="tt">今日亲密度增长明细</div>' + body + foot + '</div>';
+    return '<div class="gain"><div class="tt" data-sec="gain">' + secToggle('gain') +
+      '今日亲密度增长明细</div>' + secWrap('gain', body + foot) + '</div>';
   }
 
   function renderPanel(s) {
@@ -2024,6 +2067,10 @@
           rpWinners(Number(t.getAttribute('data-lot')));
         } else if (t.classList.contains('rp-x')) {
           rpDrop(Number(t.getAttribute('data-lot')));
+        } else if (t.classList.contains('sec-toggle')) {
+          toggleSec(t.getAttribute('data-sec'));
+        } else if (t.closest('.tt[data-sec]')) {
+          toggleSec(t.closest('.tt[data-sec]').getAttribute('data-sec'));
         }
       });
       document.documentElement.appendChild(p);
@@ -2032,10 +2079,12 @@
     const room = s.room, medal = s.medal, tasks = s.tasks;
     const live = liveInfo(room.liveStatus);
     const uname = (medal && medal.target_name) || room.uname || '主播';
+    const scroll = scrollTopOf(p, '.body');
 
     const sz = panelSizes[PANEL_ID];
     if (sz) p.style.width = sz.w + 'px';
-    p.style.height = medal ? sizeMaxH(PANEL_ID, PANEL_H) + 'px' : 'auto';
+    p.style.height = 'auto';
+    p.style.maxHeight = medal ? sizeMaxH(PANEL_ID, PANEL_H) + 'px' : '';
 
     if (!medal && !tasks) {
       p.innerHTML = '<div class="body">' +
@@ -2047,12 +2096,13 @@
       toggleLiveBtn();
       syncRadarBox();
       syncLiveBox();
+      restoreScroll(p, '.body', scroll);
       return;
     }
 
     const name = medal ? (medal.medal_name || uname) : uname;
-    const tasksSection = '<div class="tasks"><div class="tt">每日任务</div>' +
-      (tasks ? tasksHtml(tasks) : TASKS_FALLBACK.map((t) => '<div class="task"><div class="t-meta">' + t + '</div></div>').join('')) +
+    const tasksSection = '<div class="tasks"><div class="tt" data-sec="tasks">' + secToggle('tasks') + '每日任务</div>' +
+      secWrap('tasks', tasks ? tasksHtml(tasks) : TASKS_FALLBACK.map((t) => '<div class="task"><div class="t-meta">' + t + '</div></div>').join('')) +
       '</div>';
 
     let medalRows = '';
@@ -2093,6 +2143,7 @@
     toggleLiveBtn();
     syncRadarBox();
     syncLiveBox();
+    restoreScroll(p, '.body', scroll);
   }
 
 
@@ -2183,10 +2234,12 @@
       });
       document.documentElement.appendChild(q);
     }
+    const scroll = scrollTopOf(q, '.list');
     q.innerHTML = '<div class="hd">所有直播间' +
       (liveRows ? '<span class="dim"> ' + liveRows.length + ' 个</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
       '<div class="list">' + liveListHtml() + '</div>' + RESIZE_HTML;
+    restoreScroll(q, '.list', scroll);
     syncLiveBox();
     toggleLiveBtn();
   }
@@ -3110,6 +3163,7 @@
       document.documentElement.appendChild(q);
     }
     radarStatCache = radarStatText();
+    const scroll = scrollTopOf(q, '.rd-list');
     q.innerHTML = '<div class="hd">红包雷达' +
       (radarMap.size ? '<span class="dim"> ' + radarMap.size + ' 个红包</span>' : '') +
       '<span class="x" title="关闭">×</span></div>' +
@@ -3117,6 +3171,7 @@
       '<div class="rd-nums">' + radarNumsHtml() + '</div>' +
       '<div class="rd-stat">' + esc(radarStatCache) + '</div>' +
       '<div class="rd-list">' + radarListHtml() + '</div>' + RESIZE_HTML;
+    restoreScroll(q, '.rd-list', scroll);
     radarEndedMark = radarEndedCount();
     syncRadarBox();
     if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
@@ -3252,15 +3307,19 @@
     return null;
   }
 
+  function offlineTag() {
+    const tags = document.querySelectorAll(OFFLINE_SEL);
+    for (let i = 0; i < tags.length; i++) {
+      if (tags[i].id !== BTN_ID && tags[i].textContent.indexOf('未开播') >= 0) return tags[i];
+    }
+    return null;
+  }
+
   function findTarget() {
     const cap = pick(ENTRY_SEL);
     if (cap) return { el: cap, after: false };
-    const tags = document.querySelectorAll(OFFLINE_SEL);
-    for (let i = 0; i < tags.length; i++) {
-      if (tags[i].id !== BTN_ID && tags[i].textContent.indexOf('未开播') >= 0) {
-        return { el: tags[i], after: true };
-      }
-    }
+    const tag = offlineTag();
+    if (tag) return { el: tag, after: true };
     const follow = pick(FOLLOW_SEL);
     return follow ? { el: follow, after: true } : null;
   }
@@ -3401,8 +3460,10 @@
 
   function injectButton() {
     const target = findTarget();
+    const off = !!offlineTag();
     const old = document.getElementById(BTN_ID);
     if (old) {
+      old.classList.toggle('qmdmb-entry-off', off);
       if (!target) {
         if (!old.isConnected) old.remove();
         return;
@@ -3426,6 +3487,7 @@
     const btn = makeEntry();
     btn._cap = target.el;
     mountEntry(btn, target, part);
+    btn.classList.toggle('qmdmb-entry-off', off);
   }
 
 
