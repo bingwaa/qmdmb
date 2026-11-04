@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.5
+// @version      1.9.6
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -1584,12 +1584,17 @@
         cursor:pointer;font-size:12px;font-weight:400;}
       ${P('.lb.on')}{background:rgba(251,114,153,.18);}
       ${P('.lb:hover')}{background:#fb7299;color:#fff;}
+      ${P('.pb')}{position:absolute;right:76px;top:1px;box-sizing:border-box;height:16px;line-height:14px;
+        padding:0 5px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
+        cursor:pointer;font-size:12px;font-weight:400;}
+      ${P('.pb:hover')}{background:#fb7299;color:#fff;}
       ${P('.rf')}{position:absolute;right:24px;top:1px;box-sizing:border-box;width:20px;height:16px;
         line-height:14px;text-align:center;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         cursor:pointer;font-size:12px;font-weight:400;}
       ${P('.rf:hover')}{background:#fb7299;color:#fff;}
       ${P('.rf.on')}{opacity:.45;cursor:default;}
       #${PANEL_ID} .hd{padding-right:80px;}
+      #${PANEL_ID} .hd.has-pb{padding-right:104px;}
       ${P('.tag')}{font-size:12px;color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         padding:1px 6px;margin-left:8px;vertical-align:middle;}
       ${P('.dim')}{color:#9a9a9a;font-size:12px;}
@@ -2055,6 +2060,12 @@
           p.remove();
         } else if (t.classList.contains('lb')) {
           toggleLivePanel();
+        } else if (t.classList.contains('pb')) {
+          const id = (rpRoom && rpRoom.roomId) || getRoomId();
+          if (id) {
+            const u = 'https://live.bilibili.com/blanc/' + id;
+            try { window.top.location.href = u; } catch (e) { location.href = u; }
+          }
         } else if (t.classList.contains('rf')) {
           refreshPanel();
         } else if (t.classList.contains('rp-auto')) {
@@ -2088,8 +2099,8 @@
 
     if (!medal && !tasks) {
       p.innerHTML = '<div class="body">' +
-        '<div class="hd">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
-        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + refreshBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
+        '<div class="hd' + (hasActivityPage() ? ' has-pb' : '') + '">' + esc(uname) + '<span class="dim"> 粉丝团</span>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span>' + pureBtnHtml() + liveBtnHtml() + refreshBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
         '<div class="dim">你尚未加入该主播的粉丝团。</div>' +
         (s.reason ? '<div class="row dim">' + esc(s.reason) + '</div>' : '') +
         rpHtml() + '</div>' + RESIZE_HTML;
@@ -2127,10 +2138,10 @@
 
     const guard = GUARDNAME[s.guard];
     p.innerHTML = '<div class="body">' +
-      '<div class="hd">' + esc(name) +
+      '<div class="hd' + (hasActivityPage() ? ' has-pb' : '') + '">' + esc(name) +
         ' <span class="tag">Lv.' + (medal && medal.level != null ? medal.level : '?') + '</span>' +
         (guard ? '<span class="tag">' + guard + '</span>' : '') +
-        ' <span class="' + live.cls + '">' + live.text + '</span>' + liveBtnHtml() + refreshBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
+        ' <span class="' + live.cls + '">' + live.text + '</span>' + pureBtnHtml() + liveBtnHtml() + refreshBtnHtml() + '<span class="x" title="关闭">×</span></div>' +
       medalRows +
       storeRow +
       watchHtml() +
@@ -2212,6 +2223,18 @@
   function liveBtnHtml() {
     const on = document.getElementById(LIVE_PANEL_ID) ? ' on' : '';
     return '<span class="lb' + on + '" title="所有直播间">牌</span>';
+  }
+
+  function hasActivityPage() {
+    try {
+      const p = window.top.__BILIACT_PAGEINFO__;
+      if (p && p.page_name) return true;
+    } catch (e) {}
+    return window.self !== window.top && location.pathname.indexOf('/blanc/') === 0;
+  }
+
+  function pureBtnHtml() {
+    return hasActivityPage() ? '<span class="pb" title="无活动页版本">纯</span>' : '';
   }
 
   function refreshBtnHtml() {
