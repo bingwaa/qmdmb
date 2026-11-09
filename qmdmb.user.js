@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.6
+// @version      1.9.7
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -66,6 +66,9 @@
   const RP_REL_MS = 60 * 1000;
   const RP_AUTO_MS = 5000;
   const RP_AUTO_GAP = 500;
+  const RP_RETRY_GAP = 5000;
+  const RP_RETRY_TIMES = 3;
+  const RP_RETRY_CODE = 1009106;
   const RPWIN_ID = 'qmdmb-fanpanel-rpwin';
   const RP_WIN_TRIES = 6;
   const RP_WIN_MAX = 30;
@@ -1200,6 +1203,7 @@
       toast('红包参与失败：' + row.result, false);
     }
     rerender();
+    return code;
   }
 
 
@@ -1213,7 +1217,16 @@
     rpAutoChain = rpAutoChain.then(async () => {
       if (!rpAuto) return;
       const row = rpMap.get(lotId);
-      if (rpAutoReady(row)) await rpJoin(lotId);
+      if (rpAutoReady(row)) {
+        let code = await rpJoin(lotId);
+        for (let i = 0; i < RP_RETRY_TIMES && code === RP_RETRY_CODE; i++) {
+          await new Promise((r) => setTimeout(r, RP_RETRY_GAP));
+          if (!rpAuto) break;
+          const cur = rpMap.get(lotId);
+          if (!cur || cur.status === 'done' || (cur.endTime && cur.endTime <= nowSec())) break;
+          code = await rpJoin(lotId);
+        }
+      }
       await new Promise((r) => setTimeout(r, RP_AUTO_GAP));
     }).catch(() => {});
   }
