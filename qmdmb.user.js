@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.8
+// @version      1.9.9
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -71,7 +71,7 @@
   const RP_RETRY_CODE = 1009106;
   const RPWIN_ID = 'qmdmb-fanpanel-rpwin';
   const RP_WIN_TRIES = 6;
-  const RP_WIN_AUTO_TRIES = 3;
+  const RP_WIN_AUTO_TRIES = 6;
   const RP_WIN_MAX = 30;
   const LIVE_MAX = 20;
   const MEDAL_PAGE_MAX = 100;
@@ -1233,8 +1233,6 @@
       if (rpNum(j && j.code) === 0 && j.data) {
         list = rpWinParse(j);
         if (list.length) break;
-      } else {
-        break;
       }
       if (i + 1 < RP_WIN_AUTO_TRIES) await new Promise((r) => setTimeout(r, 2000));
     }
