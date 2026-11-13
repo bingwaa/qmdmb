@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.9.1
+// @version      1.9.9.2
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -755,6 +755,7 @@
       shared: !!info.shared,
       disabled: info.disabled,
       ended: false,
+      listed: false,
       status: done ? 'done' : 'idle',
       result: '',
       win: null,
@@ -1070,12 +1071,13 @@
         arr.forEach((it) => {
           const info = rpParse(it);
           if (!info) return;
-          const st = rpAdd(info);
-          if (st) {
-            changed = true;
-            if (st === 1) rpAutoArm(rpMap.get(info.lotId));
-          }
+          if (rpAdd(info)) changed = true;
           const row = rpMap.get(info.lotId);
+          if (row && !row.listed) {
+            row.listed = true;
+            changed = true;
+            rpAutoArm(row);
+          }
           if (row && rpNum(it.user_status) === 1 && row.status !== 'done') {
             row.status = 'done';
             rpDone.add(info.lotId);
@@ -1291,6 +1293,7 @@
 
   function rpAutoReady(row) {
     if (!rpAuto || !row || row.status !== 'idle') return false;
+    if (!row.listed) return false;
     if (row.endTime && row.endTime <= nowSec()) return false;
     return !rpCondBlock(row);
   }
@@ -1373,8 +1376,9 @@
         if (st) {
           if (st === 1) {
             const fresh = rpMap.get(rp.lotId);
+            const auto = rpAuto && fresh && !rpCondBlock(fresh);
             toast('检测到' + rpTypeName(rp) +
-              (rpAutoReady(fresh) ? '，5 秒后自动参与' : '，可在面板参与'), true);
+              (auto ? '，信息刷新后自动参与' : '，可在面板参与'), true);
             rpAutoArm(fresh);
           }
           rerender();
