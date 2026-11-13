@@ -2,7 +2,7 @@
 // @name         B站直播间亲密度面板
 // @name:en      Bilibili Live Fan Medal Panel
 // @namespace    https://github.com/bingwaa/qmdmb
-// @version      1.9.7
+// @version      1.9.8
 // @author       bingwaa
 // @description     在B站直播间顶栏嵌入按钮，展示该主播粉丝团亲密度、今日获取亲密度、逐项每日任务与亲密之旅进度
 // @description:en  Enhancing the experience of watching Bilibili live streaming
@@ -71,6 +71,7 @@
   const RP_RETRY_CODE = 1009106;
   const RPWIN_ID = 'qmdmb-fanpanel-rpwin';
   const RP_WIN_TRIES = 6;
+  const RP_WIN_AUTO_TRIES = 3;
   const RP_WIN_MAX = 30;
   const LIVE_MAX = 20;
   const MEDAL_PAGE_MAX = 100;
@@ -701,12 +702,14 @@
     if (!d || typeof d !== 'object') return null;
     const lotId = rpNum(d.lot_id || d.id);
     if (!lotId) return null;
-    const base = (d.sender_uinfo || {}).base || {};
+    const su = d.sender_uinfo || {};
+    const base = su.base || {};
     const awards = (Array.isArray(d.awards) ? d.awards : []).map(rpAward).filter(Boolean);
     return {
       lotId: lotId,
       rpType: rpNum(d.rp_type || d.rpType),
       sender: String(d.sender_name || base.name || ''),
+      senderUid: rpNum(d.sender_uid || su.uid || base.uid),
       awards: awards,
       endTime: rpNum(d.end_time || d.endTime),
       total: rpNum(d.total_price || d.totalPrice),
@@ -728,6 +731,7 @@
       if (info.awards.length) old.awards = info.awards;
       if (info.total) old.total = info.total;
       if (info.sender) old.sender = info.sender;
+      if (info.senderUid) old.senderUid = info.senderUid;
       if (info.rpType) old.rpType = info.rpType;
       if (info.guard) old.guard = true;
       if (info.need) old.need = info.need;
@@ -742,6 +746,7 @@
       rpType: info.rpType,
       guard: !!info.guard,
       sender: info.sender,
+      senderUid: info.senderUid,
       awards: info.awards,
       endTime: info.endTime,
       total: info.total,
@@ -753,7 +758,9 @@
       status: done ? 'done' : 'idle',
       result: '',
       win: null,
-      winLoading: false
+      winLoading: false,
+      winTried: false,
+      won: null
     });
     return 1;
   }
@@ -834,6 +841,12 @@
     }).join('、');
   }
 
+
+  function rpWinSelf(list) {
+    const me = myUid();
+    if (!me) return null;
+    return list.find((w) => String(w.uid) === String(me)) || null;
+  }
 
   function rpWinRowHtml(w) {
     const me = myUid();
@@ -933,8 +946,25 @@
     paintWinPanel();
   }
 
+  function rpSenderHtml(row) {
+    if (!row.senderUid) return esc(row.sender);
+    return '<a class="rp-sender" href="https://space.bilibili.com/' +
+      encodeURIComponent(row.senderUid) + '" target="_blank" rel="noopener" title="UID：' +
+      esc(row.senderUid) + '">' + esc(row.sender) + '</a>';
+  }
+
+  function rpWonHtml(row) {
+    const w = row.won;
+    if (w) {
+      const text = w.award ? w.award + (w.num > 0 ? '×' + w.num : '') : '';
+      return '<span class="rp-won">中了' + (text ? '：' + esc(text) : '') + '</span>';
+    }
+    if (row.win && row.win.list && row.win.list.length) return '<span class="rp-won miss">没中</span>';
+    return '';
+  }
+
   function rpRowHtml(row) {
-    const title = rpTypeName(row) + (row.sender ? ' · ' + row.sender : '');
+    const title = esc(rpTypeName(row)) + (row.sender ? ' · ' + rpSenderHtml(row) : '');
     const awards = rpAwardText(row.awards, row.total);
     const total = !row.guard && !RP_NO_TOTAL[row.rpType] && row.total
       ? Math.round(row.total / GOLD_PER_BATTERY) : 0;
@@ -960,7 +990,7 @@
     const c = row.status === 'done' || ended ? null : rpCond(row);
     const note = !ended && row.disabled && (!c || c.met === false || row.status === 'fail') ? row.disabled : '';
     return '<div class="rp-item"><div class="rp-row"><div class="rp-meta">' +
-      '<span class="rp-title">' + esc(title) + '</span>' +
+      '<span class="rp-title">' + rpWonHtml(row) + title + '</span>' +
       (total > 0 ? '<span class="rp-total">总价值：' + total + '电池</span>' : '') +
       (awards ? '<span class="rp-award">' + esc(awards) + '</span>' : '') +
       (note ? '<span class="rp-err">' + esc(note) + '</span>' : '') +
@@ -974,7 +1004,7 @@
     const rows = Array.from(rpMap.values()).sort((a, b) => a.endTime - b.endTime);
     const body = rows.length ? rows.map(rpRowHtml).join('') : '<div class="dim">未检测到红包</div>';
     return '<div class="rp"><div class="tt" data-sec="rp">' + secToggle('rp') +
-      '红包' + autoBtnHtml() + radarBtnHtml() + '</div>' + secWrap('rp', body) + '</div>';
+      '红包' + clearBtnHtml() + autoBtnHtml() + radarBtnHtml() + '</div>' + secWrap('rp', body) + '</div>';
   }
 
   function paintRedPackets() {
@@ -994,6 +1024,7 @@
         row.ended = e;
         flip = true;
       }
+      if (e && !row.won) rpWinAuto(row);
     });
     if (flip) rerender();
   }
@@ -1003,6 +1034,20 @@
     rpDropped.add(lotId);
     if (!rpMap.delete(lotId)) return;
     if (rpWinLot === lotId) closeWinPanel();
+    rerender();
+  }
+
+  function rpClearEnded() {
+    const now = nowSec();
+    let n = 0;
+    rpMap.forEach((row, lotId) => {
+      if (!row.endTime || row.endTime > now) return;
+      rpDropped.add(lotId);
+      rpMap.delete(lotId);
+      n++;
+    });
+    if (!n) return;
+    if (rpWinLot && !rpMap.has(rpWinLot)) closeWinPanel();
     rerender();
   }
 
@@ -1156,6 +1201,7 @@
       const j = await rpWinFetch(lotId);
       if (rpNum(j && j.code) === 0 && j.data) {
         row.win = { list: rpWinParse(j) };
+        row.won = rpWinSelf(row.win.list);
         if (row.win.list.length) break;
       } else {
         row.win = { err: (j && (j.code + (j.message ? '：' + j.message : ''))) || '未知错误' };
@@ -1169,6 +1215,37 @@
     }
     row.winLoading = false;
     paintWinPanel();
+    rerender();
+  }
+
+  async function rpWinAuto(row) {
+    if (!row || row.winTried || row.win || row.winLoading) return;
+    row.winTried = true;
+    row.winLoading = true;
+    rerender();
+    let list = null;
+    for (let i = 0; i < RP_WIN_AUTO_TRIES; i++) {
+      if (rpMap.get(row.lotId) !== row) {
+        row.winLoading = false;
+        return;
+      }
+      const j = await rpWinFetch(row.lotId);
+      if (rpNum(j && j.code) === 0 && j.data) {
+        list = rpWinParse(j);
+        if (list.length) break;
+      } else {
+        break;
+      }
+      if (i + 1 < RP_WIN_AUTO_TRIES) await new Promise((r) => setTimeout(r, 2000));
+    }
+    if (rpMap.get(row.lotId) !== row) {
+      row.winLoading = false;
+      return;
+    }
+    if (list && list.length) row.win = { list: list };
+    row.won = list ? rpWinSelf(list) : null;
+    row.winLoading = false;
+    if (rpWinLot === row.lotId) paintWinPanel();
     rerender();
   }
 
@@ -1642,7 +1719,7 @@
       ${P('.g-sum')}{margin-top:7px;font-size:12px;color:#9a9a9a;}
       ${P('.g-sum b')}{color:#ffd97a;font-size:14px;}
       ${P('.rp')}{margin-top:10px;border-top:1px dashed rgba(255,255,255,.16);padding-top:8px;}
-      ${P('.rp .tt')}{position:relative;padding-right:84px;color:#fb7299;font-weight:600;margin-bottom:6px;}
+      ${P('.rp .tt')}{position:relative;padding-right:124px;color:#fb7299;font-weight:600;margin-bottom:6px;}
       ${P('.sec-toggle')}{display:inline-flex;align-items:center;justify-content:center;
         width:16px;height:14px;margin:0 1px 0 0;vertical-align:middle;cursor:pointer;}
       ${P('.sec-toggle::before')}{content:'';width:0;height:0;border-left:5px solid transparent;
@@ -1656,6 +1733,11 @@
       ${P('.rp-row')}{display:flex;align-items:center;gap:8px;}
       ${P('.rp-meta')}{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
       ${P('.rp-title')}{color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      ${P('.rp-won')}{display:inline-block;margin-right:4px;padding:0 5px;line-height:16px;
+        color:#fb7299;border:1px solid #fb7299;border-radius:4px;cursor:default;user-select:none;}
+      ${P('.rp-won.miss')}{color:#9a9a9a;border-color:#9a9a9a;}
+      ${P('.rp-sender')}{color:#fb7299;text-decoration:none;}
+      ${P('.rp-sender:hover')}{text-decoration:underline;}
       ${P('.rp-top')}{display:flex;align-items:center;gap:6px;min-width:0;}
       ${P('.rp-anchor')}{flex:0 1 auto;min-width:0;color:#fb7299;font-weight:600;
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -1697,14 +1779,15 @@
       #${RPWIN_ID} .wp{color:#9a9a9a;}
       #${RPWIN_ID} .wc{color:#9a9a9a;justify-self:end;}
       ${P('.off')}{color:#ff9a3c;} ${P('.on')}{color:#7bd88f;} ${P('.unk')}{color:#8a8a8a;}
-      ${P('.rp-auto')},${P('.rp-radar')}{position:absolute;top:0;box-sizing:border-box;width:36px;height:16px;
+      ${P('.rp-auto')},${P('.rp-radar')},${P('.rp-clear')}{position:absolute;top:0;box-sizing:border-box;width:36px;height:16px;
         display:flex;align-items:center;justify-content:center;
         color:#fb7299;border:1px solid #fb7299;border-radius:4px;
         cursor:pointer;font-size:12px;font-weight:400;}
       ${P('.rp-radar')}{right:0;}
       ${P('.rp-auto')}{right:40px;}
+      ${P('.rp-clear')}{right:80px;}
       ${P('.rp-auto.on')},${P('.rp-radar.on')}{background:rgba(251,114,153,.18);}
-      ${P('.rp-auto:hover')},${P('.rp-radar:hover')}{background:#fb7299;color:#fff;}
+      ${P('.rp-auto:hover')},${P('.rp-radar:hover')},${P('.rp-clear:hover')}{background:#fb7299;color:#fff;}
       ${P('.rp-spin')}{width:9px;height:9px;border:2px solid currentColor;border-top-color:transparent;
         border-radius:50%;animation:qmdmb-rp-spin .7s linear infinite;pointer-events:none;}
       @keyframes qmdmb-rp-spin{to{transform:rotate(360deg)}}
@@ -2091,6 +2174,8 @@
           rpWinners(Number(t.getAttribute('data-lot')));
         } else if (t.classList.contains('rp-x')) {
           rpDrop(Number(t.getAttribute('data-lot')));
+        } else if (t.classList.contains('rp-clear')) {
+          rpClearEnded();
         } else if (t.classList.contains('sec-toggle')) {
           toggleSec(t.getAttribute('data-sec'));
         } else if (t.closest('.tt[data-sec]')) {
@@ -3212,6 +3297,10 @@
     syncRadarBox();
     if (document.getElementById(LIVE_PANEL_ID)) syncLiveBox();
     toggleRadarBtn();
+  }
+
+  function clearBtnHtml() {
+    return '<span class="rp-clear" title="清空已结束红包">清空</span>';
   }
 
   function autoBtnInner() {
